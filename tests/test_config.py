@@ -158,6 +158,252 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "must start"):
             validate_config(config)
 
+    def test_pointer_route_counts_must_partition_train_identities(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["route_train_identities"] = 799
+        with self.assertRaisesRegex(ConfigError, "exactly partition"):
+            validate_config(config)
+
+    def test_pointer_route_candidates_and_gates_are_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["delta_candidates"] = [0.01, 0.01]
+        with self.assertRaisesRegex(ConfigError, "duplicates"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["gates"][
+            "min_teacher_loo_equivalent_agreement"
+        ] = 1.1
+        with self.assertRaisesRegex(ConfigError, "<="):
+            validate_config(config)
+
+    def test_pointer_one_shot_training_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["one_shot"]["precision"] = "fp32"
+        with self.assertRaisesRegex(ConfigError, "bf16 or fp16"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["one_shot"]["route_soft_ce_weight"] = 0.0
+        with self.assertRaisesRegex(ConfigError, "positive"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["one_shot"]["warmup_steps"] = 2000
+        with self.assertRaisesRegex(ConfigError, "less than"):
+            validate_config(config)
+
+    def test_pointer_diffusion_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"][
+            "random_partial_probability"
+        ] = 0.4
+        with self.assertRaisesRegex(ConfigError, "sum to 1"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evaluation_steps"] = [1, 2, 8]
+        with self.assertRaisesRegex(ConfigError, "must be evaluated"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["schedule"] = "linear"
+        with self.assertRaisesRegex(ConfigError, "cosine"):
+            validate_config(config)
+
+    def test_pointer_rollout_rescue_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["rollout_rescue"][
+            "rollout_depths"
+        ] = [1, 4]
+        with self.assertRaisesRegex(ConfigError, "rollout_depths"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["rollout_rescue"][
+            "evidence_used"
+        ] = True
+        with self.assertRaisesRegex(ConfigError, "cannot use evidence"):
+            validate_config(config)
+
+    def test_pointer_evidence_order_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_order"][
+            "modify_route_logits"
+        ] = True
+        with self.assertRaisesRegex(ConfigError, "cannot modify logits"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_order"][
+            "lambda_candidates"
+        ] = [0.5, 0.5]
+        with self.assertRaisesRegex(ConfigError, "must be unique"):
+            validate_config(config)
+
+    def test_pointer_evidence_logits_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_logits"][
+            "extra_order_guidance"
+        ] = True
+        with self.assertRaisesRegex(ConfigError, "cannot add order guidance"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_logits"][
+            "lambda_candidates"
+        ] = [0.5, -1.0]
+        with self.assertRaisesRegex(ConfigError, "positive numbers"):
+            validate_config(config)
+
+    def test_pointer_evidence_remask_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_remask"][
+            "tuning_split"
+        ] = "route_validation"
+        with self.assertRaisesRegex(ConfigError, "route_calibration"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_remask"][
+            "remask_fraction_candidates"
+        ] = [0.1, 1.1]
+        with self.assertRaisesRegex(ConfigError, "invalid values"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["pointer_route"]["diffusion"]["evidence_remask"][
+            "evidence_recipes"
+        ][1]["name"] = "balanced"
+        with self.assertRaisesRegex(ConfigError, "names must be unique"):
+            validate_config(config)
+
+    def test_p2_2_rollout_stability_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_2"]["corruption"]["self_rollout_probability"] = 0.30
+        with self.assertRaisesRegex(ConfigError, "sum to 1"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_2"]["corruption"]["rollout_depths"] = [1, 4]
+        with self.assertRaisesRegex(ConfigError, "rollout_depths"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_2"]["corruption"]["stop_gradient"] = False
+        with self.assertRaisesRegex(ConfigError, "stop-gradient"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_2"]["calibration_checkpoint_steps"] = [500, 4000, 4000]
+        with self.assertRaisesRegex(ConfigError, "unique"):
+            validate_config(config)
+
+    def test_p2_3_risk_controlled_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_3"]["frozen_transformer"] = False
+        with self.assertRaisesRegex(ConfigError, "frozen Transformer"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_3"]["gate"]["training_mask_fractions"] = [0.1, 0.1]
+        with self.assertRaisesRegex(ConfigError, "unique"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_3"]["calibration"]["round_candidates"] = [0, 2]
+        with self.assertRaisesRegex(ConfigError, "round_candidates"):
+            validate_config(config)
+
+    def test_p2_4_proposal_oracle_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_4"]["frozen_transformer"] = False
+        with self.assertRaisesRegex(ConfigError, "frozen Transformer"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_4"]["top_k_candidates"] = [1, 1]
+        with self.assertRaisesRegex(ConfigError, "unique"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_4"]["proposal_fraction_candidates"] = [0.0, 0.2]
+        with self.assertRaisesRegex(ConfigError, "invalid"):
+            validate_config(config)
+
+    def test_p2_5_listwise_reranker_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_5"]["frozen_transformer"] = False
+        with self.assertRaisesRegex(ConfigError, "frozen Transformer"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_5"]["utility"]["temperature"] = 0.0
+        with self.assertRaises(ConfigError):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_5"]["calibration"][
+            "replacement_threshold_candidates"
+        ] = [0.1, 0.1]
+        with self.assertRaisesRegex(ConfigError, "unique"):
+            validate_config(config)
+
+    def test_p2_6_set_aware_reranker_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_6"]["frozen_transformer"] = False
+        with self.assertRaisesRegex(ConfigError, "frozen Transformer"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_6"]["reranker"]["attention_heads"] = 5
+        with self.assertRaisesRegex(ConfigError, "divisible"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_6"]["calibration"][
+            "replacement_budget_fraction_candidates"
+        ] = [0.1, 1.1]
+        with self.assertRaisesRegex(ConfigError, "cannot exceed"):
+            validate_config(config)
+
+    def test_p3_0_evidence_anchor_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p3_0"]["construct_test_after_validation_lock"] = False
+        with self.assertRaisesRegex(ConfigError, "lock-before-test"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p3_0"]["codebook_size"] = 512
+        with self.assertRaisesRegex(ConfigError, "fixed at 1024"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p3_0"]["fit_device"] = "tpu"
+        with self.assertRaisesRegex(ConfigError, "auto, cuda, or cpu"):
+            validate_config(config)
+
+    def test_p3_1_maskgit_protocol_is_validated(self) -> None:
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p3_1"]["model"]["attention_heads"] = 7
+        with self.assertRaisesRegex(ConfigError, "divisible"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p3_1"]["decoding"]["step_candidates"] = [1, 2, 8]
+        with self.assertRaisesRegex(ConfigError, "four steps"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p3_1"]["construct_test_after_validation_lock"] = False
+        with self.assertRaisesRegex(ConfigError, "lock-before-test"):
+            validate_config(config)
+
+        config = load_config(CONFIG_PATH, "expanded").to_dict()
+        config["p2_2"]["evidence"]["lambda_candidates"] = [0.5, 0.5]
+        with self.assertRaisesRegex(ConfigError, "unique"):
+            validate_config(config)
+
     def test_p0_2_invalid_search_and_calibration_values_are_rejected(self) -> None:
         cases = (
             ("reference_top_k_candidates", [0], "positive integers"),

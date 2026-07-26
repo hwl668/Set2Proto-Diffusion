@@ -128,6 +128,14 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "p0_2",
         "p0_3",
         "p2_1",
+        "p2_2",
+        "p2_3",
+        "p2_4",
+        "p2_5",
+        "p2_6",
+        "p3_0",
+        "p3_1",
+        "pointer_route",
         "backbone",
         "model",
         "training",
@@ -823,6 +831,1434 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "min_two_level_hard_auc_gain_over_confidence",
     ):
         _require_real(p2_gates, key, minimum=0.0)
+
+    p2_2 = _require_mapping(config, "p2_2")
+    if p2_2.get("protocol") != "route_identity_carveout_rollout_stability":
+        raise ConfigError(
+            "'p2_2.protocol' must be "
+            "'route_identity_carveout_rollout_stability'"
+        )
+    expected_splits = {
+        "source_split": "train",
+        "codebook_fit_split": "route_train",
+        "calibration_split": "route_calibration",
+        "validation_split": "route_validation",
+    }
+    for key, expected in expected_splits.items():
+        if p2_2.get(key) != expected:
+            raise ConfigError(f"'p2_2.{key}' must be '{expected}'")
+    if p2_2.get("construct_test_artifacts") is not False:
+        raise ConfigError("'p2_2.construct_test_artifacts' must be false")
+    if p2_2.get("anchor") != "quality_pooling":
+        raise ConfigError("'p2_2.anchor' must be 'quality_pooling'")
+    if p2_2.get("residual_definition") != "raw_teacher_minus_anchor":
+        raise ConfigError(
+            "'p2_2.residual_definition' must be "
+            "'raw_teacher_minus_anchor'"
+        )
+    for key in (
+        "codebook_size",
+        "max_fit_tokens",
+        "codebook_batch_size",
+        "codebook_iterations",
+        "codebook_n_init",
+        "assignment_chunk_size",
+        "smoke_steps",
+        "formal_steps",
+        "checkpoint_every_steps",
+        "batch_size",
+        "gradient_accumulation",
+    ):
+        _require_int(p2_2, key)
+    if int(p2_2["smoke_steps"]) >= int(p2_2["formal_steps"]):
+        raise ConfigError("'p2_2.smoke_steps' must be less than formal_steps")
+    if p2_2.get("fit_device") not in {"auto", "cpu", "cuda"}:
+        raise ConfigError("'p2_2.fit_device' must be auto, cpu, or cuda")
+    checkpoint_steps = p2_2.get("calibration_checkpoint_steps")
+    if (
+        not isinstance(checkpoint_steps, list)
+        or not checkpoint_steps
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or int(value) <= 0
+            or int(value) > int(p2_2["formal_steps"])
+            for value in checkpoint_steps
+        )
+    ):
+        raise ConfigError(
+            "'p2_2.calibration_checkpoint_steps' contains invalid steps"
+        )
+    if len({int(value) for value in checkpoint_steps}) != len(
+        checkpoint_steps
+    ):
+        raise ConfigError(
+            "'p2_2.calibration_checkpoint_steps' must be unique"
+        )
+    if int(p2_2["formal_steps"]) not in {
+        int(value) for value in checkpoint_steps
+    }:
+        raise ConfigError(
+            "'p2_2.calibration_checkpoint_steps' must include formal_steps"
+        )
+    if any(
+        int(value) % int(p2_2["checkpoint_every_steps"]) != 0
+        for value in checkpoint_steps
+    ):
+        raise ConfigError(
+            "P2-2 calibration checkpoints must align with checkpoint cadence"
+        )
+    for key in ("learning_rate", "max_grad_norm"):
+        _require_real(p2_2, key, minimum=1e-12)
+    _require_real(p2_2, "weight_decay", minimum=0.0)
+    warmup = _require_int(p2_2, "warmup_steps", minimum=0)
+    if warmup >= int(p2_2["formal_steps"]):
+        raise ConfigError("'p2_2.warmup_steps' must be less than formal_steps")
+    if p2_2.get("precision") not in {"bf16", "fp16"}:
+        raise ConfigError("'p2_2.precision' must be bf16 or fp16")
+    _require_bool(p2_2, "use_gpu_resident_cache")
+    if p2_2["use_gpu_resident_cache"] is not True:
+        raise ConfigError("P2-2 requires a GPU-resident training cache")
+    p2_2_corruption = _require_mapping(p2_2, "corruption")
+    probabilities = [
+        _require_real(
+            p2_2_corruption,
+            key,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        for key in (
+            "all_mask_probability",
+            "teacher_partial_probability",
+            "self_rollout_probability",
+        )
+    ]
+    if abs(sum(probabilities) - 1.0) > 1e-8:
+        raise ConfigError("P2-2 corruption probabilities must sum to 1")
+    _require_real(
+        p2_2_corruption,
+        "min_mask_ratio",
+        minimum=1e-8,
+        maximum=1.0,
+    )
+    rollout_total_steps = _require_int(
+        p2_2_corruption,
+        "rollout_total_steps",
+        minimum=2,
+    )
+    rollout_depths = p2_2_corruption.get("rollout_depths")
+    if (
+        not isinstance(rollout_depths, list)
+        or not rollout_depths
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or not 1 <= int(value) < rollout_total_steps
+            for value in rollout_depths
+        )
+    ):
+        raise ConfigError("'p2_2.corruption.rollout_depths' is invalid")
+    if len({int(value) for value in rollout_depths}) != len(rollout_depths):
+        raise ConfigError(
+            "'p2_2.corruption.rollout_depths' must be unique"
+        )
+    if p2_2_corruption.get("rollout_depth_sampling") != "uniform":
+        raise ConfigError(
+            "'p2_2.corruption.rollout_depth_sampling' must be 'uniform'"
+        )
+    _require_bool(p2_2_corruption, "stop_gradient")
+    if p2_2_corruption["stop_gradient"] is not True:
+        raise ConfigError("P2-2 self-rollout must use stop-gradient")
+    for key in (
+        "masked_token_weight",
+        "correct_committed_weight",
+        "wrong_committed_weight",
+    ):
+        _require_real(p2_2_corruption, key, minimum=0.0)
+    if float(p2_2_corruption["masked_token_weight"]) <= 0.0:
+        raise ConfigError("P2-2 masked_token_weight must be positive")
+    if (
+        float(p2_2_corruption["wrong_committed_weight"])
+        < float(p2_2_corruption["correct_committed_weight"])
+    ):
+        raise ConfigError(
+            "P2-2 wrong committed weight cannot be below stability weight"
+        )
+    p2_2_evidence = _require_mapping(p2_2, "evidence")
+    lambdas = p2_2_evidence.get("lambda_candidates")
+    if (
+        not isinstance(lambdas, list)
+        or not lambdas
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or float(value) < 0.0
+            for value in lambdas
+        )
+    ):
+        raise ConfigError(
+            "'p2_2.evidence.lambda_candidates' must be non-negative"
+        )
+    if len({float(value) for value in lambdas}) != len(lambdas):
+        raise ConfigError(
+            "'p2_2.evidence.lambda_candidates' must be unique"
+        )
+    _require_real(
+        p2_2_evidence,
+        "auc_tie_tolerance",
+        minimum=0.0,
+    )
+    p2_2_top_k = _require_int(p2_2_evidence, "top_k_frames")
+    if p2_2_top_k > condition_frames:
+        raise ConfigError(
+            "'p2_2.evidence.top_k_frames' cannot exceed condition_frames"
+        )
+    _require_real(
+        p2_2_evidence,
+        "identity_neighbor_fraction",
+        minimum=1e-8,
+        maximum=1.0,
+    )
+    for key in (
+        "identity_temperature",
+        "quality_weight",
+        "local_temperature",
+    ):
+        _require_real(p2_2_evidence, key, minimum=0.0)
+    _require_real(
+        p2_2_evidence,
+        "reliability_floor",
+        minimum=1e-12,
+    )
+    if p2_2_evidence.get("primary_mode") != "two_level_remask":
+        raise ConfigError(
+            "'p2_2.evidence.primary_mode' must be 'two_level_remask'"
+        )
+    p2_2_gates = _require_mapping(p2_2, "gates")
+    for key in (
+        "min_residual_oracle_hard_auc_gain_over_quality",
+        "min_four_step_gain_over_one_shot",
+        "min_guided_gain_over_confidence_four_step",
+        "min_guided_gain_over_one_shot",
+        "max_clean_auc_drop_vs_confidence",
+        "max_permutation_difference",
+    ):
+        _require_real(p2_2_gates, key, minimum=0.0)
+    _require_int(p2_2_gates, "min_hard_scenario_wins")
+    _require_bool(p2_2_gates, "require_positive_step_net_correction")
+
+    p2_3 = _require_mapping(config, "p2_3")
+    if (
+        p2_3.get("protocol")
+        != "route_identity_carveout_risk_controlled_refinement"
+    ):
+        raise ConfigError(
+            "'p2_3.protocol' must be "
+            "'route_identity_carveout_risk_controlled_refinement'"
+        )
+    for key, expected in (
+        ("source_split", "train"),
+        ("gate_train_split", "route_train"),
+        ("calibration_split", "route_calibration"),
+        ("validation_split", "route_validation"),
+        ("base_checkpoint_source", "p2_2_selected_rollout"),
+    ):
+        if p2_3.get(key) != expected:
+            raise ConfigError(f"'p2_3.{key}' must be '{expected}'")
+    if p2_3.get("construct_test_artifacts") is not False:
+        raise ConfigError("'p2_3.construct_test_artifacts' must be false")
+    _require_bool(p2_3, "frozen_transformer")
+    if p2_3["frozen_transformer"] is not True:
+        raise ConfigError("P2-3 requires a frozen Transformer")
+    p2_3_gate = _require_mapping(p2_3, "gate")
+    for key in (
+        "hidden_dim",
+        "batch_size",
+        "smoke_steps",
+        "formal_steps",
+        "feature_batch_size",
+        "views_per_fraction",
+    ):
+        _require_int(p2_3_gate, key)
+    if int(p2_3_gate["smoke_steps"]) >= int(p2_3_gate["formal_steps"]):
+        raise ConfigError("'p2_3.gate.smoke_steps' must be less than formal_steps")
+    for key in ("learning_rate", "max_grad_norm"):
+        _require_real(p2_3_gate, key, minimum=1e-12)
+    _require_real(p2_3_gate, "weight_decay", minimum=0.0)
+    _require_real(p2_3_gate, "dropout", minimum=0.0, maximum=1.0)
+    if float(p2_3_gate["dropout"]) >= 1.0:
+        raise ConfigError("'p2_3.gate.dropout' must be less than 1")
+    training_mask_fractions = p2_3_gate.get("training_mask_fractions")
+    if (
+        not isinstance(training_mask_fractions, list)
+        or not training_mask_fractions
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not 0.0 < float(value) <= 1.0
+            for value in training_mask_fractions
+        )
+    ):
+        raise ConfigError(
+            "'p2_3.gate.training_mask_fractions' contains invalid values"
+        )
+    if len({float(value) for value in training_mask_fractions}) != len(
+        training_mask_fractions
+    ):
+        raise ConfigError(
+            "'p2_3.gate.training_mask_fractions' must be unique"
+        )
+    _require_real(
+        p2_3_gate,
+        "random_view_fraction",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    _require_real(
+        p2_3_gate,
+        "proposal_evidence_weight",
+        minimum=0.0,
+    )
+    p2_3_calibration = _require_mapping(p2_3, "calibration")
+    for key in (
+        "proposal_fraction_candidates",
+        "utility_threshold_candidates",
+    ):
+        values = p2_3_calibration.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or float(value) < 0.0
+                or (
+                    key == "proposal_fraction_candidates"
+                    and float(value) <= 0.0
+                )
+                or float(value) > 1.0
+                for value in values
+            )
+        ):
+            raise ConfigError(f"'p2_3.calibration.{key}' is invalid")
+        if len({float(value) for value in values}) != len(values):
+            raise ConfigError(f"'p2_3.calibration.{key}' must be unique")
+    round_candidates = p2_3_calibration.get("round_candidates")
+    if (
+        not isinstance(round_candidates, list)
+        or not round_candidates
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or int(value) <= 0
+            for value in round_candidates
+        )
+    ):
+        raise ConfigError("'p2_3.calibration.round_candidates' is invalid")
+    if len({int(value) for value in round_candidates}) != len(round_candidates):
+        raise ConfigError(
+            "'p2_3.calibration.round_candidates' must be unique"
+        )
+    _require_real(
+        p2_3_calibration,
+        "auc_tie_tolerance",
+        minimum=0.0,
+    )
+    p2_3_gates = _require_mapping(p2_3, "gates")
+    for key in (
+        "min_hard_auc_gain_over_rollout_one_shot",
+        "min_hard_auc_gain_over_matched_one_shot",
+        "max_clean_auc_drop",
+        "max_permutation_difference",
+    ):
+        _require_real(p2_3_gates, key, minimum=0.0)
+    _require_int(p2_3_gates, "min_hard_scenario_wins")
+    _require_bool(p2_3_gates, "require_positive_net_correction")
+
+    p2_4 = _require_mapping(config, "p2_4")
+    if (
+        p2_4.get("protocol")
+        != "route_identity_carveout_residual_proposal_oracle"
+    ):
+        raise ConfigError(
+            "'p2_4.protocol' must be "
+            "'route_identity_carveout_residual_proposal_oracle'"
+        )
+    for key, expected in (
+        ("source_split", "train"),
+        ("calibration_split", "route_calibration"),
+        ("validation_split", "route_validation"),
+        ("base_checkpoint_source", "p2_2_selected_rollout"),
+    ):
+        if p2_4.get(key) != expected:
+            raise ConfigError(f"'p2_4.{key}' must be '{expected}'")
+    if p2_4.get("construct_test_artifacts") is not False:
+        raise ConfigError("'p2_4.construct_test_artifacts' must be false")
+    _require_bool(p2_4, "frozen_transformer")
+    if p2_4["frozen_transformer"] is not True:
+        raise ConfigError("P2-4 requires a frozen Transformer")
+    _require_real(p2_4, "proposal_evidence_weight", minimum=0.0)
+    proposal_fractions = p2_4.get("proposal_fraction_candidates")
+    if (
+        not isinstance(proposal_fractions, list)
+        or not proposal_fractions
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not 0.0 < float(value) <= 1.0
+            for value in proposal_fractions
+        )
+    ):
+        raise ConfigError(
+            "'p2_4.proposal_fraction_candidates' is invalid"
+        )
+    if len({float(value) for value in proposal_fractions}) != len(
+        proposal_fractions
+    ):
+        raise ConfigError(
+            "'p2_4.proposal_fraction_candidates' must be unique"
+        )
+    top_k_candidates = p2_4.get("top_k_candidates")
+    if (
+        not isinstance(top_k_candidates, list)
+        or not top_k_candidates
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or int(value) <= 0
+            or int(value) > int(config["quantization"]["codebook_size"])
+            for value in top_k_candidates
+        )
+    ):
+        raise ConfigError("'p2_4.top_k_candidates' is invalid")
+    if len({int(value) for value in top_k_candidates}) != len(
+        top_k_candidates
+    ):
+        raise ConfigError("'p2_4.top_k_candidates' must be unique")
+    p2_4_rounds = p2_4.get("round_candidates")
+    if (
+        not isinstance(p2_4_rounds, list)
+        or not p2_4_rounds
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or int(value) <= 0
+            for value in p2_4_rounds
+        )
+    ):
+        raise ConfigError("'p2_4.round_candidates' is invalid")
+    if len({int(value) for value in p2_4_rounds}) != len(p2_4_rounds):
+        raise ConfigError("'p2_4.round_candidates' must be unique")
+    _require_real(p2_4, "auc_tie_tolerance", minimum=0.0)
+    p2_4_gates = _require_mapping(p2_4, "gates")
+    for key in (
+        "min_exact_oracle_hard_auc_gain_over_matched_one_shot",
+        "min_local_oracle_hard_auc_gain_over_matched_one_shot",
+        "min_wrong_token_correctable_fraction",
+        "max_permutation_difference",
+    ):
+        _require_real(p2_4_gates, key, minimum=0.0)
+    _require_int(p2_4_gates, "min_hard_scenario_wins")
+
+    p2_5 = _require_mapping(config, "p2_5")
+    if (
+        p2_5.get("protocol")
+        != "route_identity_carveout_listwise_identity_reranker"
+    ):
+        raise ConfigError(
+            "'p2_5.protocol' must be "
+            "'route_identity_carveout_listwise_identity_reranker'"
+        )
+    for key, expected in (
+        ("source_split", "train"),
+        ("reranker_train_split", "route_train"),
+        ("calibration_split", "route_calibration"),
+        ("validation_split", "route_validation"),
+        ("base_checkpoint_source", "p2_2_selected_rollout"),
+    ):
+        if p2_5.get(key) != expected:
+            raise ConfigError(f"'p2_5.{key}' must be '{expected}'")
+    if p2_5.get("construct_test_artifacts") is not False:
+        raise ConfigError("'p2_5.construct_test_artifacts' must be false")
+    _require_bool(p2_5, "frozen_transformer")
+    if p2_5["frozen_transformer"] is not True:
+        raise ConfigError("P2-5 requires a frozen Transformer")
+    p2_5_top_k = _require_int(p2_5, "top_k")
+    if p2_5_top_k > int(config["quantization"]["codebook_size"]):
+        raise ConfigError("'p2_5.top_k' cannot exceed codebook size")
+    _require_int(p2_5, "feature_batch_size")
+    _require_int(p2_5, "hard_impostors")
+    p2_5_utility = _require_mapping(p2_5, "utility")
+    for key in (
+        "local_teacher_weight",
+        "gallery_margin_weight",
+        "exact_token_weight",
+    ):
+        _require_real(p2_5_utility, key, minimum=0.0)
+    _require_real(p2_5_utility, "temperature", minimum=1e-12)
+    if (
+        float(p2_5_utility["local_teacher_weight"])
+        + float(p2_5_utility["gallery_margin_weight"])
+        + float(p2_5_utility["exact_token_weight"])
+        <= 0.0
+    ):
+        raise ConfigError("P2-5 utility must contain positive supervision")
+    p2_5_reranker = _require_mapping(p2_5, "reranker")
+    for key in (
+        "hidden_dim",
+        "batch_size",
+        "smoke_steps",
+        "formal_steps",
+    ):
+        _require_int(p2_5_reranker, key)
+    if int(p2_5_reranker["smoke_steps"]) >= int(
+        p2_5_reranker["formal_steps"]
+    ):
+        raise ConfigError(
+            "'p2_5.reranker.smoke_steps' must be less than formal_steps"
+        )
+    for key in (
+        "learning_rate",
+        "max_grad_norm",
+        "listwise_loss_weight",
+        "identity_margin_loss_weight",
+        "local_map_loss_weight",
+    ):
+        _require_real(p2_5_reranker, key, minimum=1e-12)
+    _require_real(p2_5_reranker, "weight_decay", minimum=0.0)
+    _require_real(
+        p2_5_reranker,
+        "dropout",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    if float(p2_5_reranker["dropout"]) >= 1.0:
+        raise ConfigError("'p2_5.reranker.dropout' must be less than 1")
+    _require_real(p2_5_reranker, "identity_margin", minimum=0.0)
+    p2_5_calibration = _require_mapping(p2_5, "calibration")
+    for key in (
+        "model_logit_weight_candidates",
+        "replacement_threshold_candidates",
+    ):
+        values = p2_5_calibration.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or float(value) < 0.0
+                for value in values
+            )
+        ):
+            raise ConfigError(f"'p2_5.calibration.{key}' is invalid")
+        if len({float(value) for value in values}) != len(values):
+            raise ConfigError(f"'p2_5.calibration.{key}' must be unique")
+    _require_real(
+        p2_5_calibration,
+        "auc_tie_tolerance",
+        minimum=0.0,
+    )
+    p2_5_gates = _require_mapping(p2_5, "gates")
+    for key in (
+        "min_hard_auc_gain_over_rollout_one_shot",
+        "min_hard_auc_gain_over_matched_one_shot",
+        "max_clean_auc_drop",
+        "max_permutation_difference",
+    ):
+        _require_real(p2_5_gates, key, minimum=0.0)
+    _require_int(p2_5_gates, "min_hard_scenario_wins")
+    _require_bool(p2_5_gates, "require_positive_net_correction")
+
+    p2_6 = _require_mapping(config, "p2_6")
+    if (
+        p2_6.get("protocol")
+        != "route_identity_carveout_set_aware_global_reranker"
+    ):
+        raise ConfigError(
+            "'p2_6.protocol' must be "
+            "'route_identity_carveout_set_aware_global_reranker'"
+        )
+    for key, expected in (
+        ("source_split", "train"),
+        ("reranker_train_split", "route_train"),
+        ("calibration_split", "route_calibration"),
+        ("validation_split", "route_validation"),
+        ("frozen_candidate_cache", "p2_5_route_train_top8"),
+        ("base_checkpoint_source", "p2_2_selected_rollout"),
+    ):
+        if p2_6.get(key) != expected:
+            raise ConfigError(f"'p2_6.{key}' must be '{expected}'")
+    if p2_6.get("construct_test_artifacts") is not False:
+        raise ConfigError("'p2_6.construct_test_artifacts' must be false")
+    _require_bool(p2_6, "frozen_transformer")
+    if p2_6["frozen_transformer"] is not True:
+        raise ConfigError("P2-6 requires a frozen Transformer")
+    p2_6_top_k = _require_int(p2_6, "top_k")
+    if p2_6_top_k != int(p2_5["top_k"]):
+        raise ConfigError("'p2_6.top_k' must match the frozen P2-5 cache")
+    p2_6_reranker = _require_mapping(p2_6, "reranker")
+    for key in (
+        "hidden_dim",
+        "attention_heads",
+        "layers",
+        "feedforward_multiplier",
+        "batch_size",
+        "smoke_steps",
+        "formal_steps",
+    ):
+        _require_int(p2_6_reranker, key)
+    if int(p2_6_reranker["hidden_dim"]) % int(
+        p2_6_reranker["attention_heads"]
+    ):
+        raise ConfigError(
+            "'p2_6.reranker.hidden_dim' must be divisible by attention_heads"
+        )
+    if int(p2_6_reranker["smoke_steps"]) >= int(
+        p2_6_reranker["formal_steps"]
+    ):
+        raise ConfigError(
+            "'p2_6.reranker.smoke_steps' must be less than formal_steps"
+        )
+    for key in (
+        "learning_rate",
+        "max_grad_norm",
+        "listwise_loss_weight",
+        "identity_margin_loss_weight",
+        "local_map_loss_weight",
+        "replacement_gate_loss_weight",
+        "expected_injury_loss_weight",
+    ):
+        _require_real(p2_6_reranker, key, minimum=1e-12)
+    _require_real(p2_6_reranker, "weight_decay", minimum=0.0)
+    _require_real(
+        p2_6_reranker,
+        "dropout",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    if float(p2_6_reranker["dropout"]) >= 1.0:
+        raise ConfigError("'p2_6.reranker.dropout' must be less than 1")
+    _require_real(p2_6_reranker, "identity_margin", minimum=0.0)
+    _require_real(
+        p2_6_reranker,
+        "safe_replacement_probability_gain",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    p2_6_calibration = _require_mapping(p2_6, "calibration")
+    for key in (
+        "model_logit_weight_candidates",
+        "replacement_threshold_candidates",
+        "gate_threshold_candidates",
+        "replacement_budget_fraction_candidates",
+    ):
+        values = p2_6_calibration.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or float(value) < 0.0
+                for value in values
+            )
+        ):
+            raise ConfigError(f"'p2_6.calibration.{key}' is invalid")
+        if len({float(value) for value in values}) != len(values):
+            raise ConfigError(f"'p2_6.calibration.{key}' must be unique")
+    for key in (
+        "gate_threshold_candidates",
+        "replacement_budget_fraction_candidates",
+    ):
+        if any(
+            float(value) > 1.0
+            for value in p2_6_calibration[key]
+        ):
+            raise ConfigError(
+                f"'p2_6.calibration.{key}' cannot exceed 1"
+            )
+    _require_real(p2_6_calibration, "auc_tie_tolerance", minimum=0.0)
+    p2_6_gates = _require_mapping(p2_6, "gates")
+    for key in (
+        "min_hard_auc_gain_over_rollout_one_shot",
+        "min_hard_auc_gain_over_matched_one_shot",
+        "max_clean_auc_drop",
+        "max_injured_fraction",
+        "max_permutation_difference",
+    ):
+        _require_real(p2_6_gates, key, minimum=0.0)
+    _require_int(p2_6_gates, "min_hard_scenario_wins")
+    _require_bool(p2_6_gates, "require_positive_net_correction")
+
+    p3_0 = _require_mapping(config, "p3_0")
+    if (
+        p3_0.get("protocol")
+        != "frozen_evidence_anchor_residual_quantization"
+    ):
+        raise ConfigError(
+            "'p3_0.protocol' must be "
+            "'frozen_evidence_anchor_residual_quantization'"
+        )
+    for key, expected in (
+        ("train_split", "train"),
+        ("selection_split", "val"),
+        ("evaluation_split", "test"),
+        (
+            "frozen_scalar_router",
+            "stage16_p1_3_scalar_frozen_step550",
+        ),
+        ("residual_definition", "raw_teacher_minus_anchor"),
+        ("matched_quality_codebook", "p2_1_expanded_residual"),
+    ):
+        if p3_0.get(key) != expected:
+            raise ConfigError(f"'p3_0.{key}' must be '{expected}'")
+    _require_bool(p3_0, "construct_test_after_validation_lock")
+    if p3_0["construct_test_after_validation_lock"] is not True:
+        raise ConfigError("P3-0 requires lock-before-test evaluation")
+    for key in (
+        "codebook_size",
+        "max_fit_tokens",
+        "batch_size",
+        "iterations",
+        "n_init",
+        "assignment_chunk_size",
+        "inference_batch_size",
+    ):
+        _require_int(p3_0, key)
+    if int(p3_0["codebook_size"]) != 1024:
+        raise ConfigError("'p3_0.codebook_size' must remain fixed at 1024")
+    _require_int(p3_0, "seed", minimum=0)
+    if p3_0.get("fit_device") not in {"auto", "cuda", "cpu"}:
+        raise ConfigError("'p3_0.fit_device' must be auto, cuda, or cpu")
+    p3_0_gates = _require_mapping(p3_0, "gates")
+    for key in (
+        "min_train_residual_norm_reduction",
+        "min_val_anchor_hard_auc_gain",
+        "min_test_anchor_hard_auc_gain",
+        "min_val_quantized_map_cosine_gain",
+        "min_test_quantized_map_cosine_gain",
+        "max_val_quantized_hard_auc_drop",
+        "max_test_quantized_hard_auc_drop",
+        "max_permutation_difference",
+    ):
+        _require_real(p3_0_gates, key, minimum=0.0)
+    _require_int(p3_0_gates, "min_scenario_map_cosine_wins")
+
+    p3_1 = _require_mapping(config, "p3_1")
+    if p3_1.get("protocol") != "evidence_anchor_parameter_matched_maskgit":
+        raise ConfigError(
+            "'p3_1.protocol' must be "
+            "'evidence_anchor_parameter_matched_maskgit'"
+        )
+    for key, expected in (
+        ("train_split", "train"),
+        ("selection_split", "val"),
+        ("evaluation_split", "test"),
+        (
+            "frozen_scalar_router",
+            "stage16_p1_3_scalar_frozen_step550",
+        ),
+        ("frozen_codebook", "p2_1_quality_residual_k1024"),
+        ("residual_definition", "raw_teacher_minus_evidence_anchor"),
+    ):
+        if p3_1.get(key) != expected:
+            raise ConfigError(f"'p3_1.{key}' must be '{expected}'")
+    _require_bool(p3_1, "construct_test_after_validation_lock")
+    if p3_1["construct_test_after_validation_lock"] is not True:
+        raise ConfigError("P3-1 requires lock-before-test evaluation")
+    if _require_int(p3_1, "codebook_size") != 1024:
+        raise ConfigError("'p3_1.codebook_size' must remain fixed at 1024")
+    p3_1_model = _require_mapping(p3_1, "model")
+    for key in ("hidden_dim", "layers", "attention_heads"):
+        _require_int(p3_1_model, key)
+    if int(p3_1_model["hidden_dim"]) % int(
+        p3_1_model["attention_heads"]
+    ):
+        raise ConfigError("P3-1 hidden_dim must be divisible by attention_heads")
+    _require_real(p3_1_model, "mlp_ratio", minimum=1e-12)
+    _require_real(p3_1_model, "dropout", minimum=0.0, maximum=1.0)
+    p3_1_training = _require_mapping(p3_1, "training")
+    for key in (
+        "batch_size",
+        "gradient_accumulation",
+        "smoke_steps",
+        "formal_steps",
+        "checkpoint_every_steps",
+        "warmup_steps",
+    ):
+        _require_int(p3_1_training, key)
+    if int(p3_1_training["smoke_steps"]) >= int(
+        p3_1_training["formal_steps"]
+    ):
+        raise ConfigError("P3-1 smoke_steps must be less than formal_steps")
+    for key in (
+        "learning_rate",
+        "weight_decay",
+        "max_grad_norm",
+        "label_smoothing",
+        "maskgit_min_mask_ratio",
+    ):
+        _require_real(p3_1_training, key, minimum=0.0)
+    if p3_1_training.get("precision") not in {"bf16", "fp16", "fp32"}:
+        raise ConfigError("'p3_1.training.precision' is invalid")
+    p3_1_decoding = _require_mapping(p3_1, "decoding")
+    steps = p3_1_decoding.get("step_candidates")
+    if (
+        not isinstance(steps, list)
+        or not steps
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or int(value) < 1
+            for value in steps
+        )
+    ):
+        raise ConfigError("'p3_1.decoding.step_candidates' is invalid")
+    if 4 not in {int(value) for value in steps}:
+        raise ConfigError("P3-1 step candidates must include four steps")
+    modes = p3_1_decoding.get("evidence_modes")
+    if (
+        not isinstance(modes, list)
+        or set(modes) != {"evidence-ordering", "evidence-logits"}
+    ):
+        raise ConfigError("'p3_1.decoding.evidence_modes' is invalid")
+    lambdas = p3_1_decoding.get("evidence_lambda_candidates")
+    if (
+        not isinstance(lambdas, list)
+        or not lambdas
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or float(value) < 0.0
+            for value in lambdas
+        )
+    ):
+        raise ConfigError(
+            "'p3_1.decoding.evidence_lambda_candidates' is invalid"
+        )
+    _require_int(p3_1_decoding, "top_k_frames")
+    _require_real(p3_1_decoding, "auc_tie_tolerance", minimum=0.0)
+    p3_1_gates = _require_mapping(p3_1, "gates")
+    for key in (
+        "min_one_shot_hard_auc_gain_over_anchor",
+        "min_maskgit_gain_over_one_shot",
+        "min_evidence_gain_over_confidence",
+        "max_clean_auc_drop",
+        "max_permutation_difference",
+    ):
+        _require_real(p3_1_gates, key, minimum=0.0)
+    _require_int(p3_1_gates, "min_hard_scenario_wins_over_one_shot")
+
+    pointer_route = _require_mapping(config, "pointer_route")
+    if pointer_route.get("protocol") != "train_identity_carveout":
+        raise ConfigError(
+            "'pointer_route.protocol' must be 'train_identity_carveout'"
+        )
+    if pointer_route.get("source_split") != "train":
+        raise ConfigError("'pointer_route.source_split' must be 'train'")
+    if pointer_route.get("anchor") != "quality_pooling":
+        raise ConfigError("'pointer_route.anchor' must be 'quality_pooling'")
+    route_counts = [
+        _require_int(pointer_route, "route_train_identities"),
+        _require_int(pointer_route, "route_calibration_identities"),
+        _require_int(pointer_route, "route_validation_identities"),
+    ]
+    if sum(route_counts) != int(real["train_identities"]):
+        raise ConfigError(
+            "pointer-route identity counts must exactly partition "
+            "'data.real.train_identities'"
+        )
+    _require_int(pointer_route, "seed_offset", minimum=0)
+    for key in ("delta_candidates", "temperature_candidates"):
+        values = pointer_route.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or float(value) <= 0.0
+                for value in values
+            )
+        ):
+            raise ConfigError(
+                f"'pointer_route.{key}' must contain positive numbers"
+            )
+        if len({float(value) for value in values}) != len(values):
+            raise ConfigError(
+                f"'pointer_route.{key}' must not contain duplicates"
+            )
+    _require_real(
+        pointer_route,
+        "auc_tie_tolerance",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    _require_real(
+        pointer_route,
+        "equivalent_epsilon",
+        minimum=0.0,
+        maximum=2.0,
+    )
+    pointer_route_gates = _require_mapping(pointer_route, "gates")
+    _require_real(
+        pointer_route_gates,
+        "min_oracle_hard_auc_gain",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    _require_int(pointer_route_gates, "min_hard_scenario_wins")
+    for key in (
+        "min_non_anchor_fraction",
+        "min_teacher_loo_equivalent_agreement",
+        "max_wrong_frame_selection_fraction",
+    ):
+        _require_real(
+            pointer_route_gates,
+            key,
+            minimum=0.0,
+            maximum=1.0,
+        )
+    pointer_one_shot = _require_mapping(pointer_route, "one_shot")
+    for key in (
+        "batch_size",
+        "gradient_accumulation",
+        "smoke_steps",
+        "min_steps",
+        "max_steps",
+        "validate_every_steps",
+        "early_stop_patience",
+        "warmup_steps",
+        "max_parameters",
+    ):
+        minimum = 0 if key == "warmup_steps" else 1
+        _require_int(pointer_one_shot, key, minimum=minimum)
+    if int(pointer_one_shot["smoke_steps"]) >= int(
+        pointer_one_shot["min_steps"]
+    ):
+        raise ConfigError(
+            "'pointer_route.one_shot.smoke_steps' must be less than min_steps"
+        )
+    if int(pointer_one_shot["min_steps"]) > int(
+        pointer_one_shot["max_steps"]
+    ):
+        raise ConfigError(
+            "'pointer_route.one_shot.min_steps' cannot exceed max_steps"
+        )
+    if int(pointer_one_shot["warmup_steps"]) >= int(
+        pointer_one_shot["max_steps"]
+    ):
+        raise ConfigError(
+            "'pointer_route.one_shot.warmup_steps' must be less than max_steps"
+        )
+    if pointer_one_shot.get("precision") not in {"bf16", "fp16"}:
+        raise ConfigError(
+            "'pointer_route.one_shot.precision' must be bf16 or fp16"
+        )
+    for key in (
+        "learning_rate",
+        "weight_decay",
+        "max_grad_norm",
+        "route_soft_ce_weight",
+        "route_hard_ce_weight",
+        "local_map_cosine_weight",
+        "identity_map_cosine_weight",
+    ):
+        _require_real(pointer_one_shot, key, minimum=0.0)
+    if float(pointer_one_shot["route_soft_ce_weight"]) <= 0.0:
+        raise ConfigError(
+            "'pointer_route.one_shot.route_soft_ce_weight' must be positive"
+        )
+    one_shot_gates = _require_mapping(pointer_one_shot, "gates")
+    _require_real(
+        one_shot_gates,
+        "max_hard_auc_drop_vs_quality",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    _require_real(
+        one_shot_gates,
+        "min_oracle_gap_recovery",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    _require_int(one_shot_gates, "min_hard_scenario_wins")
+    _require_real(
+        one_shot_gates,
+        "max_permutation_logit_difference",
+        minimum=0.0,
+    )
+    diffusion = _require_mapping(pointer_route, "diffusion")
+    if diffusion.get("protocol") != "plain_confidence":
+        raise ConfigError(
+            "'pointer_route.diffusion.protocol' must be 'plain_confidence'"
+        )
+    _require_bool(diffusion, "paired_force_full_steps")
+    all_mask_probability = _require_real(
+        diffusion,
+        "all_mask_probability",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    random_partial_probability = _require_real(
+        diffusion,
+        "random_partial_probability",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    if abs(all_mask_probability + random_partial_probability - 1.0) > 1e-8:
+        raise ConfigError(
+            "pointer-route diffusion corruption probabilities must sum to 1"
+        )
+    _require_real(
+        diffusion,
+        "min_mask_ratio",
+        minimum=1e-8,
+        maximum=1.0,
+    )
+    default_route_steps = _require_int(diffusion, "default_steps")
+    route_evaluation_steps = diffusion.get("evaluation_steps")
+    if (
+        not isinstance(route_evaluation_steps, list)
+        or not route_evaluation_steps
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or int(value) <= 0
+            for value in route_evaluation_steps
+        )
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evaluation_steps' must contain "
+            "positive integers"
+        )
+    if len({int(value) for value in route_evaluation_steps}) != len(
+        route_evaluation_steps
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evaluation_steps' must be unique"
+        )
+    if default_route_steps not in {
+        int(value) for value in route_evaluation_steps
+    }:
+        raise ConfigError(
+            "'pointer_route.diffusion.default_steps' must be evaluated"
+        )
+    if diffusion.get("schedule") != "cosine":
+        raise ConfigError(
+            "'pointer_route.diffusion.schedule' must be 'cosine'"
+        )
+    diffusion_gates = _require_mapping(diffusion, "gates")
+    for key in (
+        "min_four_step_gain_over_one_step",
+        "min_four_step_gain_over_paired_one_shot",
+        "max_clean_auc_drop_vs_one_step",
+        "max_permutation_map_difference",
+    ):
+        _require_real(diffusion_gates, key, minimum=0.0)
+    _require_int(diffusion_gates, "min_hard_scenario_step_wins")
+    _require_bool(diffusion_gates, "require_positive_net_correction")
+    rollout_rescue = _require_mapping(diffusion, "rollout_rescue")
+    if (
+        rollout_rescue.get("protocol")
+        != "replace_random_partial_with_self_rollout"
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.rollout_rescue.protocol' must be "
+            "'replace_random_partial_with_self_rollout'"
+        )
+    rollout_all_mask_probability = _require_real(
+        rollout_rescue,
+        "all_mask_probability",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    rollout_probability = _require_real(
+        rollout_rescue,
+        "rollout_probability",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    if (
+        abs(rollout_all_mask_probability + rollout_probability - 1.0)
+        > 1e-8
+    ):
+        raise ConfigError(
+            "pointer-route rollout rescue corruption probabilities "
+            "must sum to 1"
+        )
+    rollout_total_steps = _require_int(
+        rollout_rescue,
+        "rollout_total_steps",
+        minimum=2,
+    )
+    rollout_depths = rollout_rescue.get("rollout_depths")
+    if (
+        not isinstance(rollout_depths, list)
+        or not rollout_depths
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Integral)
+            or not 1 <= int(value) < rollout_total_steps
+            for value in rollout_depths
+        )
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.rollout_rescue.rollout_depths' "
+            "must contain steps in [1, rollout_total_steps)"
+        )
+    if len({int(value) for value in rollout_depths}) != len(
+        rollout_depths
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.rollout_rescue.rollout_depths' "
+            "must be unique"
+        )
+    if rollout_rescue.get("rollout_depth_sampling") != "uniform":
+        raise ConfigError(
+            "'pointer_route.diffusion.rollout_rescue."
+            "rollout_depth_sampling' must be 'uniform'"
+        )
+    for key in (
+        "stop_gradient",
+        "use_gpu_resident_training_cache",
+        "evidence_used",
+        "remask_used",
+    ):
+        _require_bool(rollout_rescue, key)
+    if rollout_rescue["stop_gradient"] is not True:
+        raise ConfigError(
+            "pointer-route rollout rescue must stop gradients through rollout"
+        )
+    if rollout_rescue["use_gpu_resident_training_cache"] is not True:
+        raise ConfigError(
+            "pointer-route rollout rescue requires the GPU-resident cache"
+        )
+    if rollout_rescue["evidence_used"] or rollout_rescue["remask_used"]:
+        raise ConfigError(
+            "pointer-route rollout rescue cannot use evidence or remasking"
+        )
+    rollout_gates = _require_mapping(rollout_rescue, "gates")
+    for key in (
+        "min_four_step_gain_over_one_step",
+        "min_four_step_gain_over_paired_one_shot",
+        "min_four_step_gain_over_plain_d0",
+        "max_clean_auc_drop_vs_one_step",
+        "max_permutation_map_difference",
+    ):
+        _require_real(rollout_gates, key, minimum=0.0)
+    _require_int(rollout_gates, "min_hard_scenario_step_wins")
+    _require_bool(rollout_gates, "require_positive_net_correction")
+    evidence_order = _require_mapping(diffusion, "evidence_order")
+    if evidence_order.get("protocol") != "two_level_commit_order_only":
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_order.protocol' must be "
+            "'two_level_commit_order_only'"
+        )
+    evidence_lambdas = evidence_order.get("lambda_candidates")
+    if (
+        not isinstance(evidence_lambdas, list)
+        or not evidence_lambdas
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or float(value) <= 0.0
+            for value in evidence_lambdas
+        )
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_order.lambda_candidates' "
+            "must contain positive numbers"
+        )
+    if len({float(value) for value in evidence_lambdas}) != len(
+        evidence_lambdas
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_order.lambda_candidates' "
+            "must be unique"
+        )
+    for key in (
+        "auc_tie_tolerance",
+        "identity_neighbor_fraction",
+        "identity_temperature",
+        "quality_weight",
+        "local_temperature",
+        "reliability_floor",
+    ):
+        minimum = 1e-12 if key == "reliability_floor" else 0.0
+        maximum = 1.0 if key == "identity_neighbor_fraction" else None
+        _require_real(
+            evidence_order,
+            key,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    if float(evidence_order["identity_neighbor_fraction"]) <= 0.0:
+        raise ConfigError(
+            "pointer-route evidence identity_neighbor_fraction "
+            "must be positive"
+        )
+    for key in ("stop_gradient", "modify_route_logits", "remask_used"):
+        _require_bool(evidence_order, key)
+    if evidence_order["stop_gradient"] is not True:
+        raise ConfigError(
+            "pointer-route evidence ordering must use stop-gradient evidence"
+        )
+    if evidence_order["modify_route_logits"] or evidence_order["remask_used"]:
+        raise ConfigError(
+            "pointer-route evidence ordering cannot modify logits or remask"
+        )
+    evidence_gates = _require_mapping(evidence_order, "gates")
+    for key in (
+        "min_gain_over_confidence_4step",
+        "min_gain_over_rollout_1step",
+        "max_clean_auc_drop",
+        "max_permutation_map_difference",
+    ):
+        _require_real(evidence_gates, key, minimum=0.0)
+    _require_int(evidence_gates, "min_hard_scenario_wins")
+    _require_bool(evidence_gates, "require_positive_net_correction")
+    evidence_logits = _require_mapping(diffusion, "evidence_logits")
+    if evidence_logits.get("protocol") != "two_level_logits_only":
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_logits.protocol' must be "
+            "'two_level_logits_only'"
+        )
+    logits_lambdas = evidence_logits.get("lambda_candidates")
+    if (
+        not isinstance(logits_lambdas, list)
+        or not logits_lambdas
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or float(value) <= 0.0
+            for value in logits_lambdas
+        )
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_logits.lambda_candidates' "
+            "must contain positive numbers"
+        )
+    if len({float(value) for value in logits_lambdas}) != len(
+        logits_lambdas
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_logits.lambda_candidates' "
+            "must be unique"
+        )
+    for key in (
+        "auc_tie_tolerance",
+        "identity_neighbor_fraction",
+        "identity_temperature",
+        "quality_weight",
+        "local_temperature",
+        "reliability_floor",
+    ):
+        minimum = 1e-12 if key == "reliability_floor" else 0.0
+        maximum = 1.0 if key == "identity_neighbor_fraction" else None
+        _require_real(
+            evidence_logits,
+            key,
+            minimum=minimum,
+            maximum=maximum,
+        )
+    if float(evidence_logits["identity_neighbor_fraction"]) <= 0.0:
+        raise ConfigError(
+            "pointer-route evidence logits identity_neighbor_fraction "
+            "must be positive"
+        )
+    for key in (
+        "stop_gradient",
+        "modify_selection_logits",
+        "extra_order_guidance",
+        "remask_used",
+    ):
+        _require_bool(evidence_logits, key)
+    if evidence_logits["stop_gradient"] is not True:
+        raise ConfigError(
+            "pointer-route evidence logits must use stop-gradient evidence"
+        )
+    if evidence_logits["modify_selection_logits"] is not True:
+        raise ConfigError(
+            "pointer-route evidence logits must modify selection logits"
+        )
+    if (
+        evidence_logits["extra_order_guidance"]
+        or evidence_logits["remask_used"]
+    ):
+        raise ConfigError(
+            "pointer-route evidence logits cannot add order guidance or remask"
+        )
+    logits_gates = _require_mapping(evidence_logits, "gates")
+    for key in (
+        "min_four_step_gain_over_guided_one_step",
+        "min_four_step_gain_over_confidence_one_step",
+        "max_clean_auc_drop_vs_guided_one_step",
+        "max_permutation_map_difference",
+    ):
+        _require_real(logits_gates, key, minimum=0.0)
+    _require_int(logits_gates, "min_hard_scenario_step_wins")
+    for key in (
+        "require_positive_net_correction",
+        "require_wrong_identity_selection_reduction",
+    ):
+        _require_bool(logits_gates, key)
+
+    evidence_remask = _require_mapping(diffusion, "evidence_remask")
+    if (
+        evidence_remask.get("protocol")
+        != "calibration_tuned_budgeted_remask"
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_remask.protocol' must be "
+            "'calibration_tuned_budgeted_remask'"
+        )
+    if evidence_remask.get("tuning_split") != "route_calibration":
+        raise ConfigError(
+            "pointer-route remask tuning must use route_calibration"
+        )
+    if evidence_remask.get("evaluation_split") != "route_validation":
+        raise ConfigError(
+            "pointer-route remask evaluation must use route_validation"
+        )
+    remask_lambdas = evidence_remask.get("lambda_candidates")
+    if (
+        not isinstance(remask_lambdas, list)
+        or not remask_lambdas
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or float(value) <= 0.0
+            for value in remask_lambdas
+        )
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_remask.lambda_candidates' "
+            "must contain positive numbers"
+        )
+    if len({float(value) for value in remask_lambdas}) != len(
+        remask_lambdas
+    ):
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_remask.lambda_candidates' "
+            "must be unique"
+        )
+    recipes = evidence_remask.get("evidence_recipes")
+    if not isinstance(recipes, list) or not recipes:
+        raise ConfigError(
+            "'pointer_route.diffusion.evidence_remask.evidence_recipes' "
+            "must be a non-empty list"
+        )
+    recipe_names: list[str] = []
+    for index, recipe in enumerate(recipes):
+        if not isinstance(recipe, Mapping):
+            raise ConfigError(
+                "pointer-route remask evidence recipes must be mappings"
+            )
+        name = recipe.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError(
+                "pointer-route remask evidence recipes require names"
+            )
+        recipe_names.append(name)
+        for key in (
+            "identity_neighbor_fraction",
+            "identity_temperature",
+            "quality_weight",
+            "local_temperature",
+        ):
+            if key not in recipe:
+                raise ConfigError(
+                    "pointer-route remask evidence recipe "
+                    f"{index} is missing '{key}'"
+                )
+            minimum = 0.0
+            maximum = (
+                1.0 if key == "identity_neighbor_fraction" else None
+            )
+            _require_real(
+                recipe,
+                key,
+                minimum=minimum,
+                maximum=maximum,
+            )
+        if float(recipe["identity_neighbor_fraction"]) <= 0.0:
+            raise ConfigError(
+                "pointer-route remask identity_neighbor_fraction "
+                "must be positive"
+            )
+    if len(set(recipe_names)) != len(recipe_names):
+        raise ConfigError(
+            "pointer-route remask evidence recipe names must be unique"
+        )
+    _require_real(
+        evidence_remask,
+        "auc_tie_tolerance",
+        minimum=0.0,
+    )
+    _require_real(
+        evidence_remask,
+        "reliability_floor",
+        minimum=1e-12,
+    )
+    for key, maximum in (
+        ("remask_fraction_candidates", 1.0),
+        ("remask_min_score_gain_candidates", None),
+    ):
+        values = evidence_remask.get(key)
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or float(value) < 0.0
+                or (maximum is not None and float(value) > maximum)
+                for value in values
+            )
+        ):
+            raise ConfigError(
+                f"'pointer_route.diffusion.evidence_remask.{key}' "
+                "contains invalid values"
+            )
+        if key == "remask_fraction_candidates" and any(
+            float(value) <= 0.0 for value in values
+        ):
+            raise ConfigError(
+                "pointer-route remask fractions must be positive"
+            )
+        if len({float(value) for value in values}) != len(values):
+            raise ConfigError(
+                f"'pointer_route.diffusion.evidence_remask.{key}' "
+                "must be unique"
+            )
+    for key in (
+        "stop_gradient",
+        "modify_selection_logits",
+        "bounded_reversible_commit",
+        "final_step_full_commit",
+    ):
+        _require_bool(evidence_remask, key)
+        if evidence_remask[key] is not True:
+            raise ConfigError(
+                f"pointer-route evidence remask requires '{key}'"
+            )
+    remask_gates = _require_mapping(evidence_remask, "gates")
+    for key in (
+        "min_four_step_gain_over_tuned_no_remask",
+        "min_four_step_gain_over_confidence_one_step",
+        "max_clean_auc_drop_vs_tuned_no_remask",
+        "max_permutation_map_difference",
+    ):
+        _require_real(remask_gates, key, minimum=0.0)
+    _require_int(remask_gates, "min_hard_scenario_wins")
+    for key in (
+        "require_positive_net_correction",
+        "require_actual_remask",
+        "require_remask_ecr_exceeds_eir",
+    ):
+        _require_bool(remask_gates, key)
 
     backbone = _require_mapping(config, "backbone")
     if backbone.get("name") != "adaface_ir50":

@@ -631,3 +631,651 @@ is in
 `outputs/p2-1-residual-evidence-validation/artifacts/REPORT.md`. A future
 paper-level decision must lock the P2 design first and then build a new
 identity-disjoint holdout.
+
+## PointerRoute Phase 0/1 protocol and oracle audit
+
+This stage asks whether a sample-relative five-way route space has enough
+stable teacher-scored headroom to justify training. Route 0 keeps the
+feature-norm quality anchor; routes 1--4 choose the corresponding condition
+frame at each of the 49 positions. The existing 1,000 Stage16 train identities
+are deterministically carved into 800 route-train, 100 route-calibration, and
+100 route-validation identities. Existing official val/test features and
+targets are not loaded.
+
+```powershell
+python scripts/run_pointer_route_phase01.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --official-split-root data/real/celeba/splits/expanded-seed20260725 `
+  --run-id pointer-route-phase01
+```
+
+Calibration selects only from the preregistered anchor margins and soft-target
+temperatures. Validation reports quality, hard-route oracle, and soft-route
+oracle identity metrics; wrong-identity selection, visibility, route entropy,
+frame-permutation equivariance, and four leave-one-teacher-out stability
+checks are also persisted. The completed run selected `delta=0.02` and
+`temperature=0.02`. On route-validation, hard route AUC improved from
+`0.992572` to `0.998395` over the four hard scenarios (`+0.005822`), passing
+the fixed Phase 1 gate. The report is
+`outputs/pointer-route-phase01/artifacts/REPORT.md`.
+
+## PointerRoute Phase 2 one-shot model
+
+The one-shot model uses the locked Phase 0/1 route split, delta, temperature,
+and source hashes. It has the same four-layer, hidden-256, eight-head
+conditional decoder scale as the discrete-token MVP, but scores the dynamic
+anchor-plus-four-frame candidate set through a shared candidate head. No
+frame-index embedding is used. A selected route is represented by its actual
+sample feature rather than a static route ID, preserving frame-permutation
+equivariance for later masked iterative training.
+
+Run the mandatory two-step smoke first:
+
+```powershell
+python scripts/run_pointer_route_phase2.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --run-id pointer-route-phase2-smoke-new
+```
+
+Then run the formal validation-only experiment:
+
+```powershell
+python scripts/run_pointer_route_phase2.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --run-id pointer-route-phase2-one-shot-new
+```
+
+The completed formal run selected step 1,000 using route-calibration only.
+On the locked route-validation split, hard route AUC improved from `0.992573`
+to `0.994705`, recovering `36.63%` of the teacher oracle gap. Complementary
+occlusion improved by `+0.011040`; common occlusion and wrong-identity had
+small negative deltas, so the next stage should test plain multi-step
+PointerRoute correction before adding evidence. The report is
+`outputs/pointer-route-phase2-one-shot/artifacts/REPORT.md`.
+
+## PointerRoute Phase 3 paired plain diffusion
+
+Phase 3 performs the parameter-matched comparison without evidence,
+remasking, or rollout corruption. The paired one-shot and diffusion models
+are cloned from the same initial state and receive the same batch order and
+2,000 optimizer steps. D0 uses 50% all-mask and 50% random partial-mask
+corruption, followed by confidence-only irreversible 1/2/4/8-step decoding.
+
+Run the required two-step cached-feature smoke:
+
+```powershell
+python scripts/run_pointer_route_phase3.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --run-id pointer-route-phase3-smoke
+```
+
+Run the formal validation-only paired experiment:
+
+```powershell
+python scripts/run_pointer_route_phase3.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --run-id pointer-route-phase3-paired
+```
+
+The completed run was a strict `NO_GO` for the current plain multi-step
+mechanism. D0 four-step hard AUC was `0.993324`, versus `0.995465` at one
+step and `0.994645` for the paired one-shot model. Equivalent route ECR was
+`0.084090`, below EIR `0.086319`, and none of the four hard scenarios gained
+from extra steps. This localizes the failure to iterative self-conditioning
+rather than the route space itself: D0 one-step remained strong. The bounded
+next experiment is one preregistered rollout-corruption rescue, not evidence
+guidance or remasking. The complete report is
+`outputs/pointer-route-phase3-paired/artifacts/REPORT.md`.
+
+## PointerRoute rollout-corruption rescue
+
+The single authorized rescue replaces the random teacher partial half of D0
+training with stop-gradient states sampled from the model's own 1/2/3-step
+rollouts. All other optimization, data, initialization, and decoding choices
+remain locked. Training tensors are staged once in a CUDA-resident cache, and
+the run records both tensor-device assertions and `nvidia-smi` utilization.
+
+```powershell
+python scripts/run_pointer_route_rollout_rescue.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --run-id pointer-route-rollout-rescue-smoke
+```
+
+```powershell
+python scripts/run_pointer_route_rollout_rescue.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --run-id pointer-route-rollout-rescue
+```
+
+The rescue materially repaired self-conditioning: D1 four-step hard AUC
+increased to `0.995335`, `+0.002011` over D0 four-step and `+0.000690` over
+the paired one-shot model. Equivalent ECR exceeded EIR and net correction
+became positive. However, D1 four-step remained `-0.000215` below its own
+one-step result, and only wrong-identity had a positive (very small) step
+delta. The locked decision is therefore `NO_GO_STOP_PLAIN_DIFFUSION`.
+This stops further tuning of confidence-only masked routing; it does not
+convert the development split into an untouched holdout or establish a
+statistically significant gain. The complete report is
+`outputs/pointer-route-rollout-rescue/artifacts/REPORT.md`.
+
+## PointerRoute evidence-guided commit ordering
+
+This frozen-checkpoint screen tests the most conservative evidence mechanism:
+two-level evidence changes only which positions are committed first. It does
+not modify route logits or route argmax, does not remask, and performs no
+training. Lambda is selected from `[0.5, 1.0, 2.0]` on route-calibration
+before route-validation is evaluated.
+
+```powershell
+python scripts/run_pointer_route_evidence_order.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --rollout-root outputs/pointer-route-rollout-rescue `
+  --run-id pointer-route-evidence-order-smoke
+```
+
+```powershell
+python scripts/run_pointer_route_evidence_order.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --rollout-root outputs/pointer-route-rollout-rescue `
+  --run-id pointer-route-evidence-order
+```
+
+Calibration selected `lambda=0.5`. On route-validation, evidence-order
+four-step hard AUC was `0.995402`, only `+0.000067` over confidence-only
+four-step and still `-0.000148` below the unchanged one-step output. Three of
+four hard scenarios improved, and the wrong-identity frame reliability was
+only `0.011868` versus `0.262533` for inliers. However, evidence changed only
+`0.89%` of final routes, so the strict result is `NO_GO_EVIDENCE_ORDER`.
+The report is
+`outputs/pointer-route-evidence-order/artifacts/REPORT.md`.
+
+## PointerRoute evidence-logits-only diagnostic
+
+This final frozen-checkpoint PointerRoute screen gives evidence enough
+leverage to change the selected candidate:
+
+```text
+selection_logits = model_logits + lambda * stop_gradient(two_level_evidence)
+```
+
+There is no extra evidence ordering term, remasking, changed schedule, or
+training. Lambda is selected on route-calibration before route-validation.
+
+```powershell
+python scripts/run_pointer_route_evidence_logits.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --rollout-root outputs/pointer-route-rollout-rescue `
+  --evidence-order-root outputs/pointer-route-evidence-order `
+  --run-id pointer-route-evidence-logits-smoke
+```
+
+```powershell
+python scripts/run_pointer_route_evidence_logits.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --rollout-root outputs/pointer-route-rollout-rescue `
+  --evidence-order-root outputs/pointer-route-evidence-order `
+  --run-id pointer-route-evidence-logits
+```
+
+Calibration selected `lambda=1.0`. Evidence logits reduced wrong-frame
+selection from `0.003469` to `0.001633`, but four-step hard AUC was
+`0.995162`, `-0.000218` below guided one-step and `-0.000388` below the
+original confidence one-step result. Complementary occlusion had the largest
+step loss. The strict decision is
+`NO_GO_STOP_POINTERROUTE_DIFFUSION`; do not proceed automatically to
+remasking. The report is
+`outputs/pointer-route-evidence-logits/artifacts/REPORT.md`.
+
+## Calibration-tuned PointerRoute remask
+
+This follow-up deliberately overrides the automatic stop after the logits-only
+screen, but keeps test unavailable. It first tunes four fixed two-level
+evidence recipes and six lambda values on route-calibration. After locking that
+decoder, it tunes a conservative reversible-commit budget and replacement
+margin on the same calibration split. Route-validation is evaluated only after
+both choices are fixed. The rollout-rescue checkpoint remains frozen.
+
+Run the GPU smoke test:
+
+```powershell
+python scripts/run_pointer_route_remask.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --rollout-root outputs/pointer-route-rollout-rescue `
+  --evidence-order-root outputs/pointer-route-evidence-order `
+  --evidence-logits-root outputs/pointer-route-evidence-logits `
+  --run-id pointer-route-remask-tuned-smoke
+```
+
+Run the locked calibration/validation experiment:
+
+```powershell
+python scripts/run_pointer_route_remask.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --phase3-root outputs/pointer-route-phase3-paired `
+  --rollout-root outputs/pointer-route-rollout-rescue `
+  --evidence-order-root outputs/pointer-route-evidence-order `
+  --evidence-logits-root outputs/pointer-route-evidence-logits `
+  --run-id pointer-route-remask-tuned
+```
+
+The completed run selected the balanced evidence recipe with `lambda=1.5`,
+then a `5%` remask budget and `0.025` minimum replacement gain. Remasking was
+active in `32%` of validation samples and its conditional correction rate
+exceeded its injury rate, but four-step hard AUC was `0.995069`, a
+`-0.000012` change versus the tuned no-remask decoder and `-0.000481` versus
+the original confidence one-step result. The strict result is
+`NO_GO_REMASK`. Full artifacts are under
+`outputs/pointer-route-remask-tuned/artifacts/`.
+
+## P2-2 residual-token rollout/stability upgrade
+
+P2-2 replaces copy-only route tokens with synthesis-capable residual tokens.
+The Stage16 PCA is reused unchanged, while a new K=1024 residual codebook is
+fit only on the 800 `route_train` identities. The one-shot control and
+rollout-MaskGIT model use identical initialization, 4,800,512 parameters,
+4,000 optimizer updates, and GPU-resident cached features. The rollout model
+is exposed to 50% all-mask, 25% teacher-partial, and 25% stop-gradient
+self-rollout states, with extra correction weight on wrongly committed
+tokens.
+
+Run the required GPU smoke test:
+
+```powershell
+python scripts/run_p2_2_residual_stability.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --absolute-quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-1-root outputs/p2-1-residual-evidence-validation `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --run-id p2-2-residual-rollout-stability-smoke
+```
+
+Run the formal calibration and identity-disjoint validation experiment after
+the artifact has been created by smoke:
+
+```powershell
+python scripts/run_p2_2_residual_stability.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --absolute-quantization-root cache/quantization/stage16-expanded-quantization `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-1-root outputs/p2-1-residual-evidence-validation `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --reuse-residual-artifacts `
+  --run-id p2-2-residual-rollout-stability-v2
+```
+
+Calibration selected the shared 1,000-step checkpoint and `lambda=0.25`.
+On the untouched route-validation identities, the residual quantization
+oracle reached hard AUC `0.997755`, versus `0.992573` for the quality anchor,
+so the residual state space has useful headroom. The learned confidence
+four-step decoder reached `0.994775`, slightly below the matched one-shot
+control at `0.995008`; two-level remask reached `0.994532`. Stepwise net
+correction was `-0.006898`. The strict decision is `NO_GO_P2_2`: retain the
+residual representation result, but do not expand to D3PM until the iterative
+transition objective produces positive net correction. The complete report is
+`outputs/p2-2-residual-rollout-stability-v2/artifacts/REPORT.md`.
+
+## P2-3 risk-controlled residual refinement
+
+P2-3 freezes the P2-2 selected rollout Transformer and trains only a
+5,251-parameter correction gate. The gate observes frozen-model confidence,
+candidate/current margins, two-level residual evidence, token-vector
+similarity, proposal budget, iteration, and effective-frame statistics. It
+classifies every proposed replacement as neutral, correction, or injury.
+Inference begins from the rollout model's one-shot tokens and accepts a change
+only when `P(correction) - P(injury)` exceeds a calibrated threshold.
+
+Run the GPU smoke test:
+
+```powershell
+python scripts/run_p2_3_risk_controlled_refinement.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --run-id p2-3-risk-controlled-refinement-smoke
+```
+
+Run the formal route-train/calibration/validation experiment:
+
+```powershell
+python scripts/run_p2_3_risk_controlled_refinement.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --run-id p2-3-risk-controlled-refinement-v2
+```
+
+The gate was trained on 516,000 frozen-model proposals. Calibration selected
+one refinement round, a `30%` proposal budget, and utility threshold `0.1`.
+On route-validation it changed only `0.371%` of tokens and made net correction
+positive (`+0.000204`), improving hard AUC by `+0.000054` over its rollout
+one-shot starting point. However, hard AUC `0.994611` remained `-0.000397`
+below the separately trained matched one-shot control, and only complementary
+occlusion improved. The strict decision is `NO_GO_P2_3`. This demonstrates
+that risk control can suppress iterative injury, but the current proposal
+model does not expose enough correct alternatives to justify D3PM expansion.
+The report is
+`outputs/p2-3-risk-controlled-refinement-v2/artifacts/REPORT.md`.
+
+## P2-4 residual proposal oracle audit
+
+P2-4 is a frozen-model, no-training audit that separates proposal recall from
+candidate ranking. The exact-token oracle may select the teacher residual token
+only when it is already present in the frozen rollout Transformer's top-k
+proposal list. A second local-teacher oracle chooses among the current token
+and top-k proposals by continuous local teacher cosine. Proposal fraction,
+top-k, and rounds are selected on route-calibration before route-validation.
+
+```powershell
+python scripts/run_p2_4_residual_proposal_oracle.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --p2-3-root outputs/p2-3-risk-controlled-refinement-v2 `
+  --run-id p2-4-residual-proposal-oracle-smoke
+```
+
+```powershell
+python scripts/run_p2_4_residual_proposal_oracle.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --p2-3-root outputs/p2-3-risk-controlled-refinement-v2 `
+  --run-id p2-4-residual-proposal-oracle
+```
+
+Calibration selected one round with all positions proposed and top-k=8. On
+route-validation, the exact proposal oracle reached hard AUC `0.996072`,
+`+0.001065` over the matched one-shot control, and improved all four hard
+scenarios. The correct residual target appeared in ranks 2-8 for `26.80%` of
+initially wrong tokens. The local-teacher proposal oracle reached `0.997685`,
+only `0.000070` below the full residual quantization oracle and `+0.002677`
+above matched one-shot. The decision is `GO_PROPOSAL_HEADROOM`: candidate
+generation is sufficient, while argmax/commit ranking is the current
+bottleneck. The next model should use identity-margin or listwise top-k
+candidate ranking rather than another confidence/remask sweep. The report is
+`outputs/p2-4-residual-proposal-oracle/artifacts/REPORT.md`.
+
+## P2-5 listwise identity-margin top-8 reranker
+
+P2-5 converts the P2-4 oracle headroom into a learned, deployable candidate
+ranker. The rollout Transformer remains frozen. Each top-8 candidate receives
+14 inference-time features derived from model probability, two-level evidence,
+candidate/anchor geometry, local condition support, global condition identity
+support, rank, and effective-frame count. Dense route-train supervision
+combines a listwise local-teacher/gallery-margin utility target, a
+differentiable clean-gallery genuine/impostor margin loss, and continuous local
+map cosine loss. No teacher or gallery label is used at inference.
+
+```powershell
+python scripts/run_p2_5_listwise_identity_reranker.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --p2-3-root outputs/p2-3-risk-controlled-refinement-v2 `
+  --p2-4-root outputs/p2-4-residual-proposal-oracle `
+  --run-id p2-5-listwise-identity-reranker-smoke
+```
+
+```powershell
+python scripts/run_p2_5_listwise_identity_reranker.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --p2-3-root outputs/p2-3-risk-controlled-refinement-v2 `
+  --p2-4-root outputs/p2-4-residual-proposal-oracle `
+  --run-id p2-5-listwise-identity-reranker
+```
+
+The 18,561-parameter reranker was trained for 1,500 steps on 4,000 route-train
+sets. Calibration selected zero model-logit blending and replacement threshold
+`0.4`. On route-validation, it improved hard AUC by `+0.000300` over its
+rollout one-shot base, made net token correction positive (`+0.005551`), and
+improved EER, TAR@FAR=1e-3, Rank-1, identity margin, and teacher-map cosine.
+However, hard AUC `0.994857` remained `-0.000151` below the independently
+trained matched one-shot control, and complementary/common occlusion declined.
+The strict result is `NO_GO_P2_5`. The learned ranking signal is useful but not
+yet strong or stable enough for multi-step/D3PM integration. The report is
+`outputs/p2-5-listwise-identity-reranker/artifacts/REPORT.md`.
+
+## P2-6 set-aware global top-8 reranker
+
+P2-6 tests whether P2-5 failed because it ranked every spatial position
+independently. It freezes and reuses the P2-5 route-train top-8 cache, embeds
+the full `49 x 8` candidate lattice, applies a two-layer Transformer across
+positions, and predicts both candidate scores and a position-level safety
+gate. Calibration also selects a per-set replacement budget. The P2-2 token
+Transformer, PCA, residual codebook, gallery, and identity split remain
+unchanged.
+
+```powershell
+python scripts/run_p2_6_set_aware_global_reranker.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --p2-3-root outputs/p2-3-risk-controlled-refinement-v2 `
+  --p2-4-root outputs/p2-4-residual-proposal-oracle `
+  --p2-5-root outputs/p2-5-listwise-identity-reranker `
+  --run-id p2-6-set-aware-global-reranker-smoke
+```
+
+```powershell
+python scripts/run_p2_6_set_aware_global_reranker.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --residual-artifact-root cache/residual_quantization/p2-2-route-train-only `
+  --phase01-root outputs/pointer-route-phase01 `
+  --p2-2-root outputs/p2-2-residual-rollout-stability-v2 `
+  --p2-3-root outputs/p2-3-risk-controlled-refinement-v2 `
+  --p2-4-root outputs/p2-4-residual-proposal-oracle `
+  --p2-5-root outputs/p2-5-listwise-identity-reranker `
+  --run-id p2-6-set-aware-global-reranker
+```
+
+The 203,138-parameter model was trained for 2,000 GPU steps. Calibration
+selected a `5%` per-set replacement budget. This reduced the P2-5 replacement
+rate from `33.43%` to `4.01%` and injury from `1.15%` to `0.12%`, while keeping
+net token correction positive. Validation hard AUC reached `0.994706`,
+`+0.000149` over rollout one-shot but `-0.000302` below matched one-shot; none
+of the four hard scenarios exceeded matched one-shot. The strict result is
+`NO_GO_P2_6`. Cross-position context improves risk control but does not recover
+the remaining identity-ranking gap, so further learned discrete-reranker
+escalation is not authorized by this development split. The report is
+`outputs/p2-6-set-aware-global-reranker/artifacts/REPORT.md`.
+
+## P3-0 evidence-anchored discrete residual feasibility
+
+P3-0 pivots from repeatedly reranking quality-anchor residual tokens to a
+hybrid decomposition supported by the expanded holdout: first compute the
+frozen P1-3 scalar-evidence prototype, then discretize only its remaining
+teacher residual. The matched quality/evidence experiments both use K=1024,
+all 245,000 train tokens, seed 20260725, 100 GPU K-means iterations and three
+initializations. No architecture or hyperparameter is selected in P3-0; test
+is constructed only after all validation gates pass.
+
+```powershell
+python scripts/run_p3_0_evidence_anchor_quantization.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quality-residual-root cache/residual_quantization/p2-1-expanded-residual `
+  --p1-3-root outputs/stage16-p1-3-expanded-holdout `
+  --run-id p3-0-evidence-anchor-quantization-smoke
+```
+
+```powershell
+python scripts/run_p3_0_evidence_anchor_quantization.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --quality-residual-root cache/residual_quantization/p2-1-expanded-residual `
+  --p1-3-root outputs/stage16-p1-3-expanded-holdout `
+  --run-id p3-0-evidence-anchor-quantization-v4
+```
+
+The strict result is `GO_EVIDENCE_ANCHORED_DISCRETE_RESIDUAL`. The frozen
+evidence anchor reduced train residual norm by `2.16%` and matched K-means
+inertia by `3.37%`. On locked test, continuous hard AUC improved by
+`+0.001944`; refitted evidence-residual quantization improved map cosine by
+`+0.012278` and hard AUC by `+0.000235` over matched quality-residual
+quantization. All four hard scenarios improved in map cosine. Applying the
+existing quality-residual codebook directly on the evidence anchor was even
+stronger (`+0.014309` map cosine, `+0.000289` hard AUC), showing that the anchor
+is the main gain rather than extra codebook fitting. This authorizes the next
+bounded experiment: train matched one-shot and masked multi-step residual-token
+predictors around the frozen evidence anchor. The report is
+`outputs/p3-0-evidence-anchor-quantization-v4/artifacts/REPORT.md`.
+
+## P3-1 evidence-anchored parameter-matched MaskGIT
+
+P3-1 freezes the P1-3 evidence anchor and existing train-only K=1024
+quality-residual codebook. It trains a 4,846,336-parameter one-shot model and
+a parameter-identical masked-denoising model from the exact same
+initialization, using the same 5,000 train sets, 4,000 BF16 GPU steps and
+effective batch size 32. Evidence mode and strength are selected on validation
+before test is constructed.
+
+```powershell
+python scripts/run_p3_1_evidence_anchor_maskgit.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage smoke `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --absolute-quantization-root cache/quantization/stage16-expanded-quantization `
+  --quality-residual-root cache/residual_quantization/p2-1-expanded-residual `
+  --p1-3-root outputs/stage16-p1-3-expanded-holdout `
+  --p3-0-root outputs/p3-0-evidence-anchor-quantization-v4 `
+  --run-id p3-1-evidence-anchor-maskgit-smoke
+```
+
+```powershell
+python scripts/run_p3_1_evidence_anchor_maskgit.py `
+  --config configs/mvp.yaml `
+  --profile expanded `
+  --stage all `
+  --dataset-root data/real_sets/stage16-expanded-real-sets `
+  --absolute-quantization-root cache/quantization/stage16-expanded-quantization `
+  --quality-residual-root cache/residual_quantization/p2-1-expanded-residual `
+  --p1-3-root outputs/stage16-p1-3-expanded-holdout `
+  --p3-0-root outputs/p3-0-evidence-anchor-quantization-v4 `
+  --run-id p3-1-evidence-anchor-maskgit
+```
+
+The locked result is `NO_GO_P3_1_MASKGIT_ADVANTAGE`. On test, one-shot
+improves the evidence anchor by `+0.000897` hard AUC, but confidence-only
+four-step MaskGIT is `-0.000278` below matched one-shot. Validation-selected
+evidence ordering adds only `+0.000010` over confidence-only on test and the
+guided model wins one of four hard scenarios. One-shot / four-step latency is
+18.2 / 51.3 ms per cached-feature batch of 16; peak training memory is
+816 MiB. A post-hoc parameter-free canonical frame ordering fixes a BF16
+near-tie permutation instability exactly, without altering the locked metrics
+or No-Go decision. The report is
+`outputs/p3-1-evidence-anchor-maskgit/artifacts/REPORT.md`.

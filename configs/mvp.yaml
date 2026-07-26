@@ -265,6 +265,443 @@ defaults:
       min_maskgit_hard_auc_gain_over_one_shot: 0.0
       min_two_level_hard_auc_gain_over_confidence: 0.0
 
+  p2_2:
+    protocol: route_identity_carveout_rollout_stability
+    source_split: train
+    codebook_fit_split: route_train
+    calibration_split: route_calibration
+    validation_split: route_validation
+    construct_test_artifacts: false
+    anchor: quality_pooling
+    residual_definition: raw_teacher_minus_anchor
+    codebook_size: 1024
+    max_fit_tokens: 200000
+    codebook_batch_size: 4096
+    codebook_iterations: 100
+    codebook_n_init: 3
+    assignment_chunk_size: 8192
+    fit_device: auto
+    smoke_steps: 2
+    formal_steps: 4000
+    checkpoint_every_steps: 500
+    calibration_checkpoint_steps: [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+    batch_size: 4
+    gradient_accumulation: 4
+    learning_rate: 0.0003
+    weight_decay: 0.01
+    warmup_steps: 400
+    max_grad_norm: 1.0
+    precision: bf16
+    use_gpu_resident_cache: true
+    corruption:
+      all_mask_probability: 0.50
+      teacher_partial_probability: 0.25
+      self_rollout_probability: 0.25
+      min_mask_ratio: 0.05
+      rollout_total_steps: 4
+      rollout_depths: [1, 2, 3]
+      rollout_depth_sampling: uniform
+      stop_gradient: true
+      masked_token_weight: 1.0
+      correct_committed_weight: 0.10
+      wrong_committed_weight: 1.0
+    evidence:
+      lambda_candidates: [0.25, 0.5, 1.0, 1.5]
+      auc_tie_tolerance: 0.0002
+      top_k_frames: 3
+      identity_neighbor_fraction: 0.5
+      identity_temperature: 3.0
+      quality_weight: 0.25
+      local_temperature: 4.0
+      reliability_floor: 0.0001
+      primary_mode: two_level_remask
+    gates:
+      min_residual_oracle_hard_auc_gain_over_quality: 0.002
+      min_four_step_gain_over_one_shot: 0.0005
+      min_guided_gain_over_confidence_four_step: 0.0005
+      min_guided_gain_over_one_shot: 0.0005
+      min_hard_scenario_wins: 2
+      max_clean_auc_drop_vs_confidence: 0.001
+      require_positive_step_net_correction: true
+      max_permutation_difference: 0.00001
+
+  p2_3:
+    protocol: route_identity_carveout_risk_controlled_refinement
+    source_split: train
+    gate_train_split: route_train
+    calibration_split: route_calibration
+    validation_split: route_validation
+    construct_test_artifacts: false
+    frozen_transformer: true
+    base_checkpoint_source: p2_2_selected_rollout
+    gate:
+      hidden_dim: 64
+      dropout: 0.10
+      batch_size: 4096
+      smoke_steps: 2
+      formal_steps: 1000
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      max_grad_norm: 5.0
+      feature_batch_size: 16
+      training_mask_fractions: [0.10, 0.25, 0.50]
+      views_per_fraction: 3
+      random_view_fraction: 0.3333333333
+      proposal_evidence_weight: 0.25
+    calibration:
+      proposal_fraction_candidates: [0.10, 0.20, 0.30, 0.50]
+      utility_threshold_candidates: [0.0, 0.10, 0.20, 0.40]
+      round_candidates: [1, 2, 3]
+      auc_tie_tolerance: 0.0002
+    gates:
+      min_hard_auc_gain_over_rollout_one_shot: 0.0005
+      min_hard_auc_gain_over_matched_one_shot: 0.0005
+      min_hard_scenario_wins: 2
+      max_clean_auc_drop: 0.001
+      require_positive_net_correction: true
+      max_permutation_difference: 0.00001
+
+  p2_4:
+    protocol: route_identity_carveout_residual_proposal_oracle
+    source_split: train
+    calibration_split: route_calibration
+    validation_split: route_validation
+    construct_test_artifacts: false
+    frozen_transformer: true
+    base_checkpoint_source: p2_2_selected_rollout
+    proposal_evidence_weight: 0.25
+    proposal_fraction_candidates: [0.10, 0.20, 0.30, 0.50, 1.0]
+    top_k_candidates: [1, 2, 4, 8]
+    round_candidates: [1, 2, 3]
+    auc_tie_tolerance: 0.0002
+    gates:
+      min_exact_oracle_hard_auc_gain_over_matched_one_shot: 0.001
+      min_local_oracle_hard_auc_gain_over_matched_one_shot: 0.001
+      min_hard_scenario_wins: 2
+      min_wrong_token_correctable_fraction: 0.005
+      max_permutation_difference: 0.00001
+
+  p2_5:
+    protocol: route_identity_carveout_listwise_identity_reranker
+    source_split: train
+    reranker_train_split: route_train
+    calibration_split: route_calibration
+    validation_split: route_validation
+    construct_test_artifacts: false
+    frozen_transformer: true
+    base_checkpoint_source: p2_2_selected_rollout
+    top_k: 8
+    feature_batch_size: 16
+    hard_impostors: 8
+    utility:
+      local_teacher_weight: 1.0
+      gallery_margin_weight: 1.0
+      exact_token_weight: 0.05
+      temperature: 0.05
+    reranker:
+      hidden_dim: 128
+      dropout: 0.10
+      batch_size: 8
+      smoke_steps: 2
+      formal_steps: 1500
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      max_grad_norm: 5.0
+      listwise_loss_weight: 1.0
+      identity_margin_loss_weight: 1.0
+      local_map_loss_weight: 0.5
+      identity_margin: 0.05
+    calibration:
+      model_logit_weight_candidates: [0.0, 0.25, 0.5, 1.0]
+      replacement_threshold_candidates: [0.0, 0.05, 0.10, 0.20, 0.40]
+      auc_tie_tolerance: 0.0002
+    gates:
+      min_hard_auc_gain_over_rollout_one_shot: 0.0005
+      min_hard_auc_gain_over_matched_one_shot: 0.0005
+      min_hard_scenario_wins: 2
+      max_clean_auc_drop: 0.001
+      require_positive_net_correction: true
+      max_permutation_difference: 0.00001
+
+  p2_6:
+    protocol: route_identity_carveout_set_aware_global_reranker
+    source_split: train
+    reranker_train_split: route_train
+    calibration_split: route_calibration
+    validation_split: route_validation
+    construct_test_artifacts: false
+    frozen_transformer: true
+    frozen_candidate_cache: p2_5_route_train_top8
+    base_checkpoint_source: p2_2_selected_rollout
+    top_k: 8
+    reranker:
+      hidden_dim: 96
+      attention_heads: 4
+      layers: 2
+      feedforward_multiplier: 2
+      dropout: 0.10
+      batch_size: 8
+      smoke_steps: 2
+      formal_steps: 2000
+      learning_rate: 0.0005
+      weight_decay: 0.0001
+      max_grad_norm: 5.0
+      listwise_loss_weight: 1.0
+      identity_margin_loss_weight: 1.0
+      local_map_loss_weight: 0.5
+      replacement_gate_loss_weight: 0.75
+      expected_injury_loss_weight: 0.5
+      identity_margin: 0.05
+      safe_replacement_probability_gain: 0.02
+    calibration:
+      model_logit_weight_candidates: [0.0, 0.25]
+      replacement_threshold_candidates: [0.25, 0.50, 1.0]
+      gate_threshold_candidates: [0.50, 0.65, 0.80]
+      replacement_budget_fraction_candidates: [0.05, 0.10, 0.20]
+      auc_tie_tolerance: 0.0002
+    gates:
+      min_hard_auc_gain_over_rollout_one_shot: 0.0005
+      min_hard_auc_gain_over_matched_one_shot: 0.0005
+      min_hard_scenario_wins: 2
+      max_clean_auc_drop: 0.001
+      require_positive_net_correction: true
+      max_injured_fraction: 0.005
+      max_permutation_difference: 0.00005
+
+  p3_0:
+    protocol: frozen_evidence_anchor_residual_quantization
+    train_split: train
+    selection_split: val
+    evaluation_split: test
+    construct_test_after_validation_lock: true
+    frozen_scalar_router: stage16_p1_3_scalar_frozen_step550
+    residual_definition: raw_teacher_minus_anchor
+    matched_quality_codebook: p2_1_expanded_residual
+    codebook_size: 1024
+    max_fit_tokens: 250000
+    batch_size: 4096
+    iterations: 100
+    n_init: 3
+    fit_device: auto
+    assignment_chunk_size: 8192
+    inference_batch_size: 32
+    seed: 20260725
+    gates:
+      min_train_residual_norm_reduction: 0.01
+      min_val_anchor_hard_auc_gain: 0.001
+      min_test_anchor_hard_auc_gain: 0.001
+      min_val_quantized_map_cosine_gain: 0.002
+      min_test_quantized_map_cosine_gain: 0.002
+      max_val_quantized_hard_auc_drop: 0.0005
+      max_test_quantized_hard_auc_drop: 0.0005
+      min_scenario_map_cosine_wins: 3
+      max_permutation_difference: 0.00005
+
+  p3_1:
+    protocol: evidence_anchor_parameter_matched_maskgit
+    train_split: train
+    selection_split: val
+    evaluation_split: test
+    construct_test_after_validation_lock: true
+    frozen_scalar_router: stage16_p1_3_scalar_frozen_step550
+    frozen_codebook: p2_1_quality_residual_k1024
+    residual_definition: raw_teacher_minus_evidence_anchor
+    codebook_size: 1024
+    model:
+      hidden_dim: 256
+      layers: 4
+      attention_heads: 8
+      mlp_ratio: 4.0
+      dropout: 0.0
+    training:
+      batch_size: 8
+      gradient_accumulation: 4
+      smoke_steps: 2
+      formal_steps: 4000
+      checkpoint_every_steps: 1000
+      learning_rate: 0.0003
+      weight_decay: 0.01
+      warmup_steps: 500
+      precision: bf16
+      max_grad_norm: 1.0
+      label_smoothing: 0.0
+      maskgit_min_mask_ratio: 0.05
+    decoding:
+      step_candidates: [1, 2, 4, 8]
+      evidence_modes:
+        - evidence-ordering
+        - evidence-logits
+      evidence_lambda_candidates: [0.25, 0.5, 1.0]
+      top_k_frames: 3
+      auc_tie_tolerance: 0.0002
+    gates:
+      min_one_shot_hard_auc_gain_over_anchor: 0.0
+      min_maskgit_gain_over_one_shot: 0.0003
+      min_evidence_gain_over_confidence: 0.0002
+      min_hard_scenario_wins_over_one_shot: 2
+      max_clean_auc_drop: 0.001
+      max_permutation_difference: 0.00005
+
+  pointer_route:
+    protocol: train_identity_carveout
+    source_split: train
+    anchor: quality_pooling
+    route_train_identities: 800
+    route_calibration_identities: 100
+    route_validation_identities: 100
+    seed_offset: 41001
+    delta_candidates: [0.005, 0.01, 0.02]
+    temperature_candidates: [0.01, 0.02, 0.05]
+    auc_tie_tolerance: 0.0005
+    equivalent_epsilon: 0.002
+    gates:
+      min_oracle_hard_auc_gain: 0.005
+      min_hard_scenario_wins: 2
+      min_non_anchor_fraction: 0.05
+      min_teacher_loo_equivalent_agreement: 0.80
+      max_wrong_frame_selection_fraction: 0.25
+    one_shot:
+      batch_size: 8
+      gradient_accumulation: 4
+      smoke_steps: 2
+      min_steps: 800
+      max_steps: 2000
+      validate_every_steps: 200
+      early_stop_patience: 5
+      learning_rate: 0.0003
+      weight_decay: 0.01
+      warmup_steps: 200
+      max_grad_norm: 1.0
+      precision: bf16
+      route_soft_ce_weight: 1.0
+      route_hard_ce_weight: 0.25
+      local_map_cosine_weight: 0.5
+      identity_map_cosine_weight: 0.5
+      max_parameters: 6000000
+      gates:
+        max_hard_auc_drop_vs_quality: 0.0005
+        min_oracle_gap_recovery: 0.30
+        min_hard_scenario_wins: 1
+        max_permutation_logit_difference: 0.00001
+    diffusion:
+      protocol: plain_confidence
+      paired_force_full_steps: true
+      all_mask_probability: 0.50
+      random_partial_probability: 0.50
+      min_mask_ratio: 0.05
+      default_steps: 4
+      evaluation_steps: [1, 2, 4, 8]
+      schedule: cosine
+      gates:
+        min_four_step_gain_over_one_step: 0.0005
+        min_four_step_gain_over_paired_one_shot: 0.0005
+        min_hard_scenario_step_wins: 2
+        max_clean_auc_drop_vs_one_step: 0.001
+        require_positive_net_correction: true
+        max_permutation_map_difference: 0.00001
+      rollout_rescue:
+        protocol: replace_random_partial_with_self_rollout
+        all_mask_probability: 0.50
+        rollout_probability: 0.50
+        rollout_total_steps: 4
+        rollout_depths: [1, 2, 3]
+        rollout_depth_sampling: uniform
+        stop_gradient: true
+        use_gpu_resident_training_cache: true
+        evidence_used: false
+        remask_used: false
+        gates:
+          min_four_step_gain_over_one_step: 0.0005
+          min_four_step_gain_over_paired_one_shot: 0.0005
+          min_four_step_gain_over_plain_d0: 0.0005
+          min_hard_scenario_step_wins: 2
+          max_clean_auc_drop_vs_one_step: 0.001
+          require_positive_net_correction: true
+          max_permutation_map_difference: 0.00001
+      evidence_order:
+        protocol: two_level_commit_order_only
+        lambda_candidates: [0.5, 1.0, 2.0]
+        auc_tie_tolerance: 0.0002
+        identity_neighbor_fraction: 0.5
+        identity_temperature: 3.0
+        quality_weight: 0.25
+        local_temperature: 4.0
+        reliability_floor: 0.0001
+        stop_gradient: true
+        modify_route_logits: false
+        remask_used: false
+        gates:
+          min_gain_over_confidence_4step: 0.0005
+          min_gain_over_rollout_1step: 0.0005
+          min_hard_scenario_wins: 2
+          max_clean_auc_drop: 0.001
+          require_positive_net_correction: true
+          max_permutation_map_difference: 0.00001
+      evidence_logits:
+        protocol: two_level_logits_only
+        lambda_candidates: [0.5, 1.0, 2.0]
+        auc_tie_tolerance: 0.0002
+        identity_neighbor_fraction: 0.5
+        identity_temperature: 3.0
+        quality_weight: 0.25
+        local_temperature: 4.0
+        reliability_floor: 0.0001
+        stop_gradient: true
+        modify_selection_logits: true
+        extra_order_guidance: false
+        remask_used: false
+        gates:
+          min_four_step_gain_over_guided_one_step: 0.0005
+          min_four_step_gain_over_confidence_one_step: 0.0005
+          min_hard_scenario_step_wins: 2
+          max_clean_auc_drop_vs_guided_one_step: 0.001
+          require_positive_net_correction: true
+          require_wrong_identity_selection_reduction: true
+          max_permutation_map_difference: 0.00001
+      evidence_remask:
+        protocol: calibration_tuned_budgeted_remask
+        auc_tie_tolerance: 0.0002
+        lambda_candidates: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+        evidence_recipes:
+          - name: balanced
+            identity_neighbor_fraction: 0.5
+            identity_temperature: 3.0
+            quality_weight: 0.25
+            local_temperature: 4.0
+          - name: soft_identity
+            identity_neighbor_fraction: 0.5
+            identity_temperature: 1.5
+            quality_weight: 0.125
+            local_temperature: 6.0
+          - name: local_only
+            identity_neighbor_fraction: 0.5
+            identity_temperature: 0.0
+            quality_weight: 0.0
+            local_temperature: 6.0
+          - name: hard_identity
+            identity_neighbor_fraction: 0.5
+            identity_temperature: 6.0
+            quality_weight: 0.25
+            local_temperature: 4.0
+        reliability_floor: 0.0001
+        remask_fraction_candidates: [0.05, 0.10, 0.20, 0.40]
+        remask_min_score_gain_candidates: [0.0, 0.01, 0.025]
+        stop_gradient: true
+        modify_selection_logits: true
+        bounded_reversible_commit: true
+        final_step_full_commit: true
+        tuning_split: route_calibration
+        evaluation_split: route_validation
+        gates:
+          min_four_step_gain_over_tuned_no_remask: 0.0005
+          min_four_step_gain_over_confidence_one_step: 0.0005
+          min_hard_scenario_wins: 2
+          max_clean_auc_drop_vs_tuned_no_remask: 0.001
+          require_positive_net_correction: true
+          require_actual_remask: true
+          require_remask_ecr_exceeds_eir: true
+          max_permutation_map_difference: 0.00001
+
   backbone:
     name: adaface_ir50
     architecture: ir_50
@@ -373,6 +810,10 @@ profiles:
     backbone:
       cache_batch_size: 8
       cache_max_images_per_split: 16
+    pointer_route:
+      route_train_identities: 16
+      route_calibration_identities: 4
+      route_validation_identities: 4
 
   pilot:
     data:
@@ -401,6 +842,10 @@ profiles:
     backbone:
       cache_batch_size: 64
       cache_max_images_per_split: 0
+    pointer_route:
+      route_train_identities: 120
+      route_calibration_identities: 40
+      route_validation_identities: 40
 
   expanded:
     data:

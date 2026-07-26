@@ -26,6 +26,9 @@ class DecodeResult:
     commit_iteration: torch.Tensor
     commit_score: torch.Tensor
     trace: list[dict[str, Any]]
+    provisional_tokens: tuple[torch.Tensor, ...]
+    committed_after_iteration: tuple[torch.Tensor, ...]
+    remasked: tuple[torch.Tensor, ...]
 
 
 @dataclass(frozen=True)
@@ -359,6 +362,7 @@ def one_shot_decode(
     model: ConditionalTokenTransformer,
     condition_features: torch.Tensor,
     condition_quality: torch.Tensor,
+    evidence_anchor: torch.Tensor | None = None,
 ) -> torch.Tensor:
     batch = condition_features.shape[0]
     input_tokens = torch.full(
@@ -367,7 +371,16 @@ def one_shot_decode(
         dtype=torch.int64,
         device=condition_features.device,
     )
-    logits = model(input_tokens, condition_features, condition_quality)
+    logits = (
+        model(input_tokens, condition_features, condition_quality)
+        if evidence_anchor is None
+        else model(
+            input_tokens,
+            condition_features,
+            condition_quality,
+            evidence_anchor,
+        )
+    )
     return logits.argmax(dim=-1)
 
 
@@ -383,6 +396,7 @@ def maskgit_decode(
     top_k_frames: int,
     evidence_lambda: float,
     evidence_override: torch.Tensor | None = None,
+    evidence_anchor: torch.Tensor | None = None,
 ) -> DecodeResult:
     if steps < 1:
         raise ValueError("steps must be positive")
@@ -444,9 +458,21 @@ def maskgit_decode(
                 condition_features.device
             )
     trace: list[dict[str, Any]] = []
+    provisional_parts: list[torch.Tensor] = []
+    committed_parts: list[torch.Tensor] = []
+    remasked_parts: list[torch.Tensor] = []
 
     for iteration in range(steps):
-        logits = model(tokens, condition_features, condition_quality).float()
+        logits = (
+            model(tokens, condition_features, condition_quality)
+            if evidence_anchor is None
+            else model(
+                tokens,
+                condition_features,
+                condition_quality,
+                evidence_anchor,
+            )
+        ).float()
         if mode in {"evidence-logits", "evidence-remask"}:
             assert evidence is not None
             selection_logits = logits + evidence_lambda * evidence
@@ -473,6 +499,7 @@ def maskgit_decode(
             positions=positions,
         )
         remasked_count = 0
+        remasked = torch.zeros_like(committed)
         if mode == "evidence-remask":
             selected_indices = torch.topk(
                 commit_score,
@@ -483,7 +510,8 @@ def maskgit_decode(
             ).indices
             selected = torch.zeros_like(committed)
             selected.scatter_(1, selected_indices, True)
-            remasked_count = int((committed & ~selected).sum().item())
+            remasked = committed & ~selected
+            remasked_count = int(remasked.sum().item())
             tokens.fill_(model.mask_token_id)
             tokens[selected] = candidates[selected]
             commit_iteration[~selected] = -1
@@ -514,6 +542,10 @@ def maskgit_decode(
                 committed_score[selected] = commit_score[selected]
                 committed |= selected
 
+        provisional_parts.append(candidates.detach().clone())
+        committed_parts.append(committed.detach().clone())
+        remasked_parts.append(remasked.detach().clone())
+
         trace.append(
             {
                 "iteration": iteration + 1,
@@ -534,4 +566,7 @@ def maskgit_decode(
         commit_iteration=commit_iteration,
         commit_score=committed_score,
         trace=trace,
+        provisional_tokens=tuple(provisional_parts),
+        committed_after_iteration=tuple(committed_parts),
+        remasked=tuple(remasked_parts),
     )

@@ -497,6 +497,35 @@ def measure_residual_inference_latency(
             evidence_override=evidence,
         )
 
+    def two_level_remask() -> None:
+        anchor = quality_weighted_anchor(condition, quality)
+        evidence = compute_two_level_residual_evidence(
+            condition,
+            quality,
+            anchor,
+            codebook,
+            identity_neighbor_fraction=float(
+                evidence_config["identity_neighbor_fraction"]
+            ),
+            identity_temperature=float(
+                evidence_config["identity_temperature"]
+            ),
+            quality_weight=float(evidence_config["quality_weight"]),
+            local_temperature=float(evidence_config["local_temperature"]),
+            reliability_floor=float(evidence_config["reliability_floor"]),
+        ).evidence
+        maskgit_decode(
+            maskgit_model,
+            condition,
+            quality,
+            codebook=codebook,
+            steps=steps,
+            mode="evidence-remask",
+            top_k_frames=top_k,
+            evidence_lambda=evidence_lambda,
+            evidence_override=evidence,
+        )
+
     methods = {
         "one_shot_transformer": lambda: one_shot_decode(
             one_shot_model,
@@ -506,6 +535,7 @@ def measure_residual_inference_latency(
         "maskgit_confidence_4step": confidence,
         "maskgit_local_logits": local_logits,
         "maskgit_two_level_logits": two_level_logits,
+        "maskgit_two_level_remask": two_level_remask,
     }
     warmups = int(config["evaluation"]["latency_warmup_runs"])
     measurements = int(config["evaluation"]["latency_measurement_runs"])
