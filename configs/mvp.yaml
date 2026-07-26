@@ -1,0 +1,421 @@
+version: 1
+
+defaults:
+  project:
+    name: set2proto-diffusion
+    seed: 20260725
+
+  paths:
+    data_dir: data
+    weights_dir: weights
+    cache_dir: cache
+    output_dir: outputs
+
+  data:
+    feature_grid:
+      height: 7
+      width: 7
+      backbone_dim: 512
+      projected_dim: 128
+    condition_frames: 4
+    teacher_frames: 4
+    input_size: 112
+    synthetic:
+      train_identities: 200
+      val_identities: 50
+      test_identities: 50
+      images_per_identity: 12
+      sets_per_identity: 5
+    real:
+      dataset: celeba
+      min_images_per_identity: 10
+      train_identities: 1000
+      val_identities: 100
+      test_identities: 250
+      expected_images: 202599
+      expected_identities: 10177
+      sets_per_identity: 5
+      set_max_identities_per_split: 0
+    corruptions:
+      gaussian_blur: true
+      motion_blur: true
+      low_light: true
+      jpeg: true
+      random_occlusion: true
+      complementary_occlusion: true
+      common_occlusion: true
+      wrong_identity_probability: 0.25
+
+  quantization:
+    method: spherical_kmeans
+    codebook_size: 1024
+    max_fit_tokens: 250000
+    batch_size: 4096
+    iterations: 100
+    n_init: 3
+    gate_min_cosine: 0.90
+    gate_min_utilization: 0.20
+
+  projection:
+    method: pca
+    max_fit_tokens: 50000
+    svd_solver: randomized
+
+  teacher:
+    mode: disjoint
+    robust_keep_fraction: 0.75
+    consensus_weight: 2.0
+    quality_weight: 1.0
+
+  p0_2:
+    reference_top_k_candidates: [3, 8, 16]
+    identity_weight_candidates: [0.5, 1.0, 2.0]
+    local_reliability_weight: 1.0
+    quality_weight: 1.0
+    minimum_frame_weight: 0.02
+    clean_gap_quantile: 0.95
+    reliability_scale_floor: 0.02
+    identity_scale_floor: 0.02
+    local_z_clip: [-4.0, 2.0]
+    selection_clean_auc_max_drop: 0.001
+    selection_rank1_max_drop: 0.01
+
+  p0_3:
+    candidate_hooks: [body.3, body.6, body.7, body.20]
+    expected_shapes:
+      body.3: [128, 28, 28]
+      body.6: [128, 28, 28]
+      body.7: [256, 14, 14]
+      body.20: [256, 14, 14]
+    visibility_resize: nearest
+    cache_dtype: float16
+    set_batch_size: 8
+    selection_min_hard_auc_gain: 0.002
+    selection_min_complementary_auc_gain: 0.0
+    selection_min_hard_scenario_wins: 2
+    selection_clean_auc_max_drop: 0.001
+    selection_rank1_max_drop: 0.01
+    suffix_replay_min_map_cosine: 0.999
+    tie_break_prefer_later: true
+
+  p1_0:
+    candidate_methods:
+      - teacher_best_frame_oracle
+      - teacher_convex_residual_oracle
+      - teacher_bounded_span_residual_oracle
+    convex_iterations: 64
+    convex_step_size: 0.5
+    span_ridge: 0.01
+    span_residual_norm_cap: 0.5
+    selection_min_hard_auc_gain: 0.002
+    selection_min_complementary_auc_gain: 0.0
+    selection_min_hard_scenario_wins: 2
+    selection_clean_auc_max_drop: 0.001
+    selection_rank1_max_drop: 0.01
+    selection_min_teacher_map_cosine_gain: 0.01
+
+  p1_1:
+    oracle_method: teacher_best_frame_oracle
+    hidden_dim: 64
+    dropout: 0.0
+    max_parameters: 250000
+    batch_size: 32
+    smoke_steps: 2
+    min_steps: 500
+    max_steps: 2000
+    validate_every_steps: 100
+    early_stop_patience: 6
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    warmup_steps: 100
+    max_grad_norm: 1.0
+    distillation_weight: 1.0
+    local_map_cosine_weight: 1.0
+    global_identity_weight: 1.0
+    precision: bf16
+    selection_min_hard_auc_gain: 0.002
+    selection_min_complementary_auc_gain: 0.0
+    selection_min_hard_scenario_wins: 2
+    selection_clean_auc_max_drop: 0.001
+    selection_rank1_max_drop: 0.01
+    selection_min_teacher_map_cosine_gain: 0.005
+
+  p1_2:
+    candidate_recipes:
+      - anchor_safe
+      - identity_balanced
+    recipes:
+      anchor_safe:
+        distillation_weight: 0.25
+        gate_target_weight: 0.5
+        local_teacher_weight: 0.25
+        global_teacher_weight: 0.25
+        gallery_cross_entropy_weight: 0.5
+        gallery_margin_weight: 0.5
+        anchor_regularization_weight: 0.1
+      identity_balanced:
+        distillation_weight: 0.25
+        gate_target_weight: 0.5
+        local_teacher_weight: 0.25
+        global_teacher_weight: 0.25
+        gallery_cross_entropy_weight: 1.0
+        gallery_margin_weight: 1.0
+        anchor_regularization_weight: 0.02
+    gate_hidden_dim: 32
+    gate_initial_bias: -3.0
+    gate_teacher_improvement_epsilon: 0.001
+    gallery_temperature: 0.07
+    gallery_margin: 0.1
+    max_parameters: 300000
+    batch_size: 32
+    smoke_steps: 2
+    min_steps: 400
+    max_steps: 1200
+    validate_every_steps: 100
+    early_stop_patience: 5
+    learning_rate: 0.0003
+    weight_decay: 0.0001
+    warmup_steps: 50
+    max_grad_norm: 1.0
+    precision: bf16
+    selection_min_hard_auc_gain: 0.002
+    selection_min_complementary_auc_gain: 0.0
+    selection_min_hard_scenario_wins: 2
+    selection_clean_auc_max_drop: 0.001
+    selection_rank1_max_drop: 0.01
+    selection_min_teacher_map_cosine_gain: 0.005
+
+  p1_3:
+    candidate_recipes:
+      - scalar_frozen
+      - scalar_low_lr
+    recipes:
+      scalar_frozen:
+        router_learning_rate_scale: 0.0
+        distillation_weight: 0.0
+        gate_target_weight: 2.0
+        local_teacher_weight: 0.1
+        global_teacher_weight: 0.1
+        gallery_cross_entropy_weight: 0.1
+        relative_gallery_margin_weight: 1.0
+        anchor_safety_weight: 1.0
+      scalar_low_lr:
+        router_learning_rate_scale: 0.1
+        distillation_weight: 0.1
+        gate_target_weight: 2.0
+        local_teacher_weight: 0.1
+        global_teacher_weight: 0.1
+        gallery_cross_entropy_weight: 0.1
+        relative_gallery_margin_weight: 1.0
+        anchor_safety_weight: 1.0
+    gate_hidden_dim: 32
+    gate_initial_value: 0.05
+    maximum_gate: 0.35
+    gate_target_improvement_scale: 0.05
+    relative_gallery_margin_target: 0.005
+    gallery_temperature: 0.07
+    max_parameters: 300000
+    batch_size: 32
+    smoke_steps: 2
+    min_steps: 100
+    max_steps: 600
+    validate_every_steps: 50
+    early_stop_patience: 5
+    learning_rate: 0.0003
+    weight_decay: 0.0001
+    warmup_steps: 25
+    max_grad_norm: 1.0
+    precision: bf16
+    selection_min_hard_auc_gain: 0.002
+    selection_min_complementary_auc_gain: 0.0
+    selection_min_hard_scenario_wins: 2
+    selection_clean_auc_max_drop: 0.001
+    selection_rank1_max_drop: 0.01
+    selection_min_teacher_map_cosine_gain: 0.005
+
+  p2_1:
+    protocol: validation_only
+    construct_test_artifacts: false
+    anchor: quality_pooling
+    residual_definition: raw_teacher_minus_anchor
+    codebook_method: euclidean_minibatch_kmeans
+    codebook_size: 1024
+    max_fit_tokens: 250000
+    batch_size: 4096
+    iterations: 100
+    n_init: 3
+    fit_device: auto
+    assignment_chunk_size: 8192
+    smoke_steps: 2
+    formal_steps: 2000
+    checkpoint_every_steps: 500
+    evidence:
+      primary_mode: logits
+      top_k_frames: 3
+      lambda: 1.0
+      identity_neighbor_fraction: 0.5
+      identity_temperature: 3.0
+      quality_weight: 0.25
+      local_temperature: 4.0
+      reliability_floor: 0.0001
+    gates:
+      min_map_cosine_gain_over_absolute: 0.10
+      min_codebook_utilization: 0.20
+      max_hard_auc_drop_vs_quality_anchor: 0.001
+      min_maskgit_hard_auc_gain_over_one_shot: 0.0
+      min_two_level_hard_auc_gain_over_confidence: 0.0
+
+  backbone:
+    name: adaface_ir50
+    architecture: ir_50
+    checkpoint_filename: adaface_ir50_webface4m.ckpt
+    checkpoint_source: webface4m
+    checkpoint_url: https://drive.google.com/file/d/1BmDRrhPsHSbXcWZoYFPJg2KJn1sd3QpN/view
+    input_color_order: bgr
+    frozen: true
+    spatial_hook: auto
+    cache_dtype: float16
+    cache_batch_size: 128
+    cache_max_images_per_split: 0
+
+  model:
+    architecture: conditional_transformer
+    hidden_dim: 256
+    layers: 4
+    attention_heads: 8
+    mlp_ratio: 4.0
+    dropout: 0.0
+    use_frame_index_embedding: false
+    use_native_sdpa: true
+
+  training:
+    batch_size: 8
+    gradient_accumulation: 4
+    min_steps: 10000
+    max_steps: 20000
+    validate_every_steps: 500
+    checkpoint_every_steps: 1000
+    learning_rate: 0.0003
+    weight_decay: 0.01
+    warmup_steps: 500
+    early_stop_patience: 5
+    precision: bf16
+    max_grad_norm: 1.0
+    label_smoothing: 0.0
+    maskgit_min_mask_ratio: 0.05
+
+  decoding:
+    default_steps: 4
+    evaluation_steps: [1, 2, 4, 8]
+    schedule: cosine
+    evidence:
+      top_k_frames: 3
+      lambda_grid: [0.5, 1.0, 2.0]
+      default_lambda: 1.0
+      stop_gradient: true
+      enable_remask: true
+
+  evaluation:
+    batch_size: 16
+    far_targets: [0.01, 0.001]
+    scenarios:
+      - clean
+      - low_quality
+      - complementary_occlusion
+      - common_occlusion
+      - wrong_identity
+    latency_warmup_runs: 20
+    latency_measurement_runs: 100
+    permutation_trials: 8
+    bootstrap_samples: 1000
+
+  runtime:
+    require_cuda: true
+    deterministic: true
+    num_workers: 4
+    pin_memory: true
+    max_peak_memory_gib: 7.2
+    oom_batch_fallback: [8, 4, 2, 1]
+    oom_condition_frames_fallback: [4, 3, 2]
+    oom_hidden_dim_fallback: [256, 192, 128]
+
+  logging:
+    jsonl_filename: events.jsonl
+    metrics_filename: metrics.csv
+    manifest_filename: run_manifest.json
+
+profiles:
+  smoke:
+    data:
+      synthetic:
+        train_identities: 24
+        val_identities: 8
+        test_identities: 8
+        images_per_identity: 8
+        sets_per_identity: 5
+      real:
+        train_identities: 24
+        val_identities: 8
+        test_identities: 8
+        set_max_identities_per_split: 2
+    training:
+      batch_size: 2
+      gradient_accumulation: 1
+      min_steps: 1
+      max_steps: 2
+      validate_every_steps: 1
+      checkpoint_every_steps: 1
+      warmup_steps: 0
+      early_stop_patience: 1
+    runtime:
+      num_workers: 0
+      oom_batch_fallback: [2, 1]
+    backbone:
+      cache_batch_size: 8
+      cache_max_images_per_split: 16
+
+  pilot:
+    data:
+      synthetic:
+        train_identities: 80
+        val_identities: 20
+        test_identities: 20
+        images_per_identity: 10
+        sets_per_identity: 5
+      real:
+        train_identities: 200
+        val_identities: 25
+        test_identities: 50
+    training:
+      batch_size: 4
+      gradient_accumulation: 4
+      min_steps: 1000
+      max_steps: 2000
+      validate_every_steps: 250
+      checkpoint_every_steps: 500
+      warmup_steps: 200
+      early_stop_patience: 5
+    runtime:
+      num_workers: 2
+      oom_batch_fallback: [4, 2, 1]
+    backbone:
+      cache_batch_size: 64
+      cache_max_images_per_split: 0
+
+  expanded:
+    data:
+      real:
+        train_identities: 1000
+        val_identities: 100
+        test_identities: 250
+    training:
+      batch_size: 4
+      gradient_accumulation: 4
+    runtime:
+      num_workers: 2
+      oom_batch_fallback: [4, 2, 1]
+    backbone:
+      cache_batch_size: 64
+      cache_max_images_per_split: 0
+
+  full: {}

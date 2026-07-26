@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local experiment inputs and generated artifacts
+/data/*
+!/data/.gitkeep
+/weights/*
+!/weights/.gitkeep
+/cache/*
+!/cache/.gitkeep
+/outputs/*
+!/outputs/.gitkeep
+
+# Model artifacts outside the standard folders
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+checkpoint_*
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
